@@ -35,6 +35,8 @@ class Collector:
         self._last_full: dict = {}
         self._last_snapshot: dict = {}
         self._channels: dict = {}       # peer_id -> input entity
+        self._thumbs_due: list = []      # (story, peer_id) found by the live poll: one thumbnail try each
+        self.live_thumbs = bool(cfg.get("backfill", {}).get("thumbs", True))
 
     # ── stories ────────────────────────────────────────────────────────────
     def _ingest_users(self, users) -> None:
@@ -52,6 +54,8 @@ class Collector:
             new = db.upsert_story(self.con, row)
             if new and not row.get("deleted"):
                 log.info("new story %s/%s", peer_id, row["story_id"])
+                if self.live_thumbs:
+                    self._thumbs_due.append((s, peer_id))
                 if self.on_view:
                     self.on_view("story", row)
             ids.append(row["story_id"])
@@ -64,7 +68,9 @@ class Collector:
         self._ingest_users(getattr(res, "users", None))
         ps = getattr(res, "stories", None)
         items = getattr(ps, "stories", None) or []
-        return self._ingest_stories(items, peer_id)
+        ids = self._ingest_stories(items, peer_id)
+        await self.fetch_due_thumbs()
+        return ids
 
     async def refresh_pinned(self, peer=SELF, peer_id: int | None = None) -> list[int]:
         """All profile (pinned) stories, every page — new ones join the 30-minute profile poll."""
@@ -82,6 +88,7 @@ class Collector:
                 break
             await self.sleep(self.poll.get("page_pause_s", 0.7))
         self._ingest_stories(items, peer_id)
+        await self.fetch_due_thumbs()
         return [int(s.id) for s in items]
 
     def active_ids(self, peer_id: int | None = None) -> list[int]:
@@ -299,6 +306,7 @@ class Collector:
                        thumbs: bool = True, refetch: bool = False, progress=print) -> dict:
         peer_id = peer_id or self.owner_id
         pause = float(self.cfg.get("backfill", {}).get("pause_s", 2.0))
+        self.live_thumbs = self.live_thumbs and thumbs     # --no-thumbs covers the pinned merge below too
         items = await self.archive_items(peer)
         if peer_id == self.owner_id:
             # active stories are in the archive too; pinned ones are not always — merge every page of both
@@ -340,6 +348,13 @@ class Collector:
             await self.sleep(pause)
         db.refresh_first_seen(self.con)
         return {"stories": len(items), "imported": done, "already": skipped, "viewer_rows": viewers}
+
+    async def fetch_due_thumbs(self, limit: int = 5) -> None:
+        """Thumbnails of stories the live poll found (the history import fetches its own). One try each."""
+        while self._thumbs_due and limit > 0:
+            story, peer_id = self._thumbs_due.pop(0)
+            limit -= 1
+            await self.save_thumb(story, peer_id)
 
     async def save_thumb(self, story, peer_id: int) -> None:
         client = getattr(self.api, "client", None)

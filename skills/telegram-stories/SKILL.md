@@ -1,7 +1,7 @@
 ---
 name: telegram-stories
 description: "Telegram stories: who viewed, stats tables, auto-replies."
-version: 1.1.2
+version: 1.2.0
 author: "Anton Vaskov (itpartypattaya), https://t.me/passone"
 license: MIT
 compatibility: Hermes Agent >= 0.21 (written against 0.21.5); Python 3.10+; Telethon 1.40+ (tested 1.44)
@@ -56,6 +56,7 @@ Telegram re-run themselves with the interpreter that has Telethon.
 | Channel stories | `table channel --peer @channel` |
 | Pulse / digest text | `report pulse last` · `report digest --period 7d` |
 | Full CSV | `export views --period 90d` · `export people` · `export stories` |
+| Dashboard: one HTML page, charts, viewer lists | `dashboard` · `dashboard --period 1y` (tab open first) |
 | Fresh data now | `sync` (the service does it every minute anyway) |
 | Health | `doctor` · `status` |
 | Stop all automatic messages | `stop` (resume: `start`) |
@@ -73,6 +74,11 @@ Add `--format csv|json|text` to any table when Markdown is not wanted.
 3. If the output ends with `CSV: <path>`, the table was cut: attach that file (in Hermes: a line
    `MEDIA:<path>`) and say so.
 4. Unsure which story the owner means: `table summary --period 7d` first, then `table story <id>`.
+
+**Dashboard.** "Make a dashboard", "show it all on one page", "charts of my stories".
+1. Run `dashboard`; it prints the path of one HTML file (~10 s on 30,000 views).
+2. Send the file to the owner (in Hermes: a line `MEDIA:<path>`) and say it opens in any browser, offline.
+3. The file holds viewers' names: send it only to the owner, never post or publish it.
 
 **Automatic messages (rules).** See `references/rules.md` for the spec and ready recipes (lead magnet at
 the end of a series, "reply to get it", "tell me when @someone opens it", warm-up segments).

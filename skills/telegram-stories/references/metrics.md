@@ -52,6 +52,20 @@ the person's first view, minus two days of slack).
 Views per local hour and weekday (first views). "Best hours to post" ranks posting hours by the median
 view counter of stories posted at that hour, among hours with at least 3 stories.
 
+## Dashboard (`dashboard`)
+
+The page uses the definitions above; these are the additions.
+
+| Block | Definition |
+|---|---|
+| Period tabs | Last 30 days, 90 days, 365 days, all time. "vs the previous period" compares with the period of the same length right before it; under 5% change is shown without color. |
+| Views per story | Telegram's counter of each story in the period. Color: "vs usual" ≥ +10% green, ≤ −10% red; a story younger than 48 h is pale. Dashed line: median of the bars. |
+| Best stories | Up to six finished stories with the highest "vs usual" (the block needs at least three). Thumbnails come only for them. |
+| How fast views come | Finished stories with a viewer list: per story, the share of listed viewers who came within 1 / 6 / 24 / 48 h; the median over stories. "Half of the viewers come within": median of each story's median lag. |
+| When people watch | First views by weekday × local hour; cell color relative to the busiest cell. |
+| Month by month | Calendar months, local time. Bar: people with a first view of any story that month. Dark part: people whose first view ever was that month. Line: median view counter of stories posted that month. |
+| Audience | The statuses and the table of `table people`. |
+
 ## Pulse and digests (sent by the service)
 
 - Pulse: N hours after posting (default 2), listed viewers so far vs the median of the previous 20

@@ -250,11 +250,13 @@ def people(con, peer_id: int, now: int | None = None) -> list[dict]:
 def hours(con, peer_id: int, start: int, end: int, tz) -> dict:
     by_hour = [0] * 24
     by_day = [0] * 7
+    matrix = [[0] * 24 for _ in range(7)]     # weekday × hour
     for (ts,) in con.execute("SELECT first_viewed_at FROM views WHERE peer_id=? AND first_viewed_at>=? "
                              "AND first_viewed_at<?", (peer_id, start, end)):
         dt = datetime.fromtimestamp(ts, tz)
         by_hour[dt.hour] += 1
         by_day[dt.weekday()] += 1
+        matrix[dt.weekday()][dt.hour] += 1
     # posting hour → median reach of stories posted at that hour (3+ stories)
     post: dict = {}
     for s in con.execute("SELECT posted_at, views FROM stories WHERE peer_id=? AND deleted=0 AND posted_at>=? "
@@ -263,7 +265,63 @@ def hours(con, peer_id: int, start: int, end: int, tz) -> dict:
         post.setdefault(h, []).append(s[1])
     best = sorted(((h, median(v), len(v)) for h, v in post.items() if len(v) >= 3),
                   key=lambda x: -(x[1] or 0))[:3]
-    return {"by_hour": by_hour, "by_day": by_day, "best_post_hours": best, "total": sum(by_hour)}
+    return {"by_hour": by_hour, "by_day": by_day, "matrix": matrix, "best_post_hours": best, "total": sum(by_hour)}
+
+
+def speed(con, peer_id: int, start: int, end: int, marks=(1, 6, 24, 48)) -> dict:
+    """How fast a story collects its viewers. For every finished story with a viewer list: the share of its
+    listed viewers whose first view came within N hours, and the time by which half of them came. Returns
+    the medians over those stories."""
+    lags: dict = {}
+    for sid, lag in con.execute(
+            "SELECT v.story_id, v.first_viewed_at - s.posted_at FROM views v JOIN stories s "
+            "ON s.peer_id=v.peer_id AND s.story_id=v.story_id WHERE v.peer_id=? AND s.deleted=0 "
+            "AND s.list_available=1 AND s.posted_at>=? AND s.posted_at<? AND s.posted_at<? "
+            "AND v.first_viewed_at IS NOT NULL", (peer_id, start, end, db.now() - 48 * HOUR)):
+        lags.setdefault(sid, []).append(max(0, lag))
+    shares = {h: [] for h in marks}
+    halves = []
+    for xs in lags.values():
+        xs.sort()
+        for h in marks:
+            shares[h].append(sum(1 for x in xs if x <= h * HOUR) / len(xs))
+        halves.append(xs[(len(xs) - 1) // 2])
+    return {"stories": len(lags), "share": {h: median(v) for h, v in shares.items()}, "half": median(halves)}
+
+
+def monthly(con, peer_id: int, tz) -> list[dict]:
+    """Calendar months (local time) from the first story to now: stories posted, median of their view
+    counters, people with at least one first view that month, and how many of them viewed for the first
+    time ever."""
+    def key(ts):
+        dt = datetime.fromtimestamp(ts, tz)
+        return dt.year, dt.month
+
+    months: dict = {}
+    for ts, views in con.execute("SELECT posted_at, views FROM stories WHERE peer_id=? AND deleted=0 "
+                                 "AND posted_at IS NOT NULL", (peer_id,)):
+        m = months.setdefault(key(ts), {"stories": 0, "views": [], "active": set(), "new": 0})
+        m["stories"] += 1
+        if views is not None:
+            m["views"].append(views)
+    first: dict = {}
+    for uid, ts in con.execute("SELECT user_id, first_viewed_at FROM views WHERE peer_id=? "
+                               "AND first_viewed_at IS NOT NULL", (peer_id,)):
+        months.setdefault(key(ts), {"stories": 0, "views": [], "active": set(), "new": 0})["active"].add(uid)
+        if uid not in first or ts < first[uid]:
+            first[uid] = ts
+    for ts in first.values():
+        months[key(ts)]["new"] += 1
+    if not months:
+        return []
+    (y, mo), last = min(months), key(db.now())
+    out = []
+    while (y, mo) <= last:
+        m = months.get((y, mo), {"stories": 0, "views": [], "active": set(), "new": 0})
+        out.append({"year": y, "month": mo, "stories": m["stories"], "views_median": median(m["views"]),
+                    "active": len(m["active"]), "new": m["new"]})
+        y, mo = (y + 1, 1) if mo == 12 else (y, mo + 1)
+    return out
 
 
 def channel(con, peer_id: int, start: int, end: int) -> list[dict]:

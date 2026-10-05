@@ -109,6 +109,30 @@ The skill saves stories, viewers and views to CSV files. Excel and Google Sheets
 
 Ask the agent: *"Export the views for 90 days to CSV"*
 
+### 10. Dashboard
+
+The skill makes one HTML file with all the statistics on one page. Open it in a browser on a computer or a
+phone. You do not need a server or an internet connection.
+
+The page shows:
+
+- the main numbers for 30 days, 90 days, 1 year or all time, and the change against the previous period;
+- the views of each story; the color compares each story with your usual result;
+- your best stories, with previews;
+- how fast a story collects its viewers;
+- the best hours to post, and a map of views by day of the week and hour;
+- the trend by month: viewers, new viewers, the median views of one story;
+- the audience groups and a table of all viewers, with a search;
+- the channel stories and the autoresponder rules.
+
+Select a story to see its viewers. Select a person to see the stories that this person viewed.
+
+![The dashboard on made-up data](docs/dashboard.png)
+
+Ask the agent: *"Make the stories dashboard"*. The agent sends you the file.
+
+> **Note:** the file contains the names of your viewers. Do not forward it and do not publish it.
+
 ## Installation
 
 Requirements:
@@ -319,7 +343,7 @@ The history import reads the story archive. Example: 209 stories and 30,110 view
 | Network | one connection to Telegram, a few KB per minute |
 | Disk | ~5 MB of database per 30,000 views; previews ~20 KB per story (optional) |
 | Language model | not used |
-| Short-term | a command for ~1 second when the agent asks for a table; the history import one time |
+| Short-term | a command for ~1 second when the agent asks for a table; ~10 seconds for the dashboard; the history import one time |
 | Not necessary | a web server, open ports, third-party services, telemetry |
 
 ## Separate Telegram session
@@ -361,6 +385,7 @@ For details, see [`references/telegram-limits.md`](skills/telegram-stories/refer
 | `~/.hermes/data/telegram-stories/stories.db` | the database: stories, viewers, view times, reactions, rules, sent messages |
 | `~/.hermes/data/telegram-stories/thumbs/` | small story previews (`backfill --no-thumbs` skips them) |
 | `~/.hermes/data/telegram-stories/exports/` | CSV files |
+| `~/.hermes/data/telegram-stories/dashboard/dashboard.html` | the dashboard (`stories.py dashboard` makes it again) |
 
 How to see the data:
 
@@ -407,6 +432,7 @@ The agent runs these commands. You can also run them in a terminal.
 | `stories.py table compare 219 220 221` | a comparison of stories |
 | `stories.py table channel --peer @channel` | channel stories |
 | `stories.py export views --period 90d` | an export to CSV |
+| `stories.py dashboard [--period 1y]` | the HTML dashboard: one file; `--no-thumbs` makes it smaller |
 | `stories.py rule …` | autoresponder rules |
 | `stories.py stop` / `start` | stop / continue all automatic messages |
 | `stories.py doctor` | a health check |

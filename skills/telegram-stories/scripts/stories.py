@@ -12,6 +12,7 @@
   stories.py segment list|show|create|add|remove|delete
   stories.py stop | start | status             autoresponder kill switch
   stories.py export views|stories|people [--period 90d]
+  stories.py dashboard [--out FILE] [--period 30d|90d|1y|all] [--no-thumbs]   one-file HTML page
   stories.py notify-test
 
 Table and report commands only read SQLite and work on any Python >= 3.10.
@@ -140,6 +141,12 @@ def cmd_export(args, cfg) -> int:
     return 0
 
 
+def cmd_dashboard(args, cfg) -> int:
+    from tgstories import dashboard
+    print(dashboard.build(cfg, args.out, period=args.period, thumbs=not args.no_thumbs))
+    return 0
+
+
 def cmd_notify_test(args, cfg) -> int:
     from tgstories import notify
     text = args.text or "telegram-stories: notification test ✅"
@@ -217,6 +224,12 @@ def build_parser() -> argparse.ArgumentParser:
     ex.add_argument("what", choices=["views", "stories", "people"])
     ex.add_argument("--period", default="all")
     ex.set_defaults(func=cmd_export)
+
+    ds = sub.add_parser("dashboard", help="one-file HTML dashboard (charts, tables, viewer lists)")
+    ds.add_argument("--out", help="file to write (default: <data dir>/dashboard/dashboard.html)")
+    ds.add_argument("--period", choices=["30d", "90d", "1y", "all"], help="tab open by default")
+    ds.add_argument("--no-thumbs", action="store_true", help="leave story thumbnails out (smaller file)")
+    ds.set_defaults(func=cmd_dashboard)
 
     nt = sub.add_parser("notify-test", help="send a test notification")
     nt.add_argument("--text")
