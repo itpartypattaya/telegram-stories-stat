@@ -79,6 +79,29 @@ def digest_text(con, cfg: dict, period: str = "7d", peer_id: int | None = None) 
     return "\n\n".join(parts)
 
 
+async def send_due(con, cfg: dict, peer_id: int, alert, refresh=None) -> int:
+    """Send the pulses and digests that are due. `refresh(ids)` re-reads those stories from Telegram first
+    (`None`: the active ones): at the hourly pace the stored lists can be up to an hour old.
+
+    Marked as sent only after a confirmed delivery; a failed one is tried again next minute (pulses stay
+    due for 6 hours, a digest for the rest of its day)."""
+    sent = 0
+    for sid in due_pulses(con, cfg, peer_id):
+        if refresh:
+            await refresh([sid])
+        if await alert(pulse_text(con, cfg, story_ref=str(sid), peer_id=peer_id)):
+            con.execute("UPDATE stories SET pulse_sent_at=? WHERE peer_id=? AND story_id=?", (db.now(), peer_id, sid))
+            sent += 1
+    due = due_digests(con, cfg)
+    if due and refresh:
+        await refresh(None)
+    for key, period in due:
+        if await alert(digest_text(con, cfg, period=period, peer_id=peer_id)):
+            mark_sent(con, key)
+            sent += 1
+    return sent
+
+
 def due_digests(con, cfg: dict, now_ts: int | None = None) -> list[tuple[str, str]]:
     """(key, period) pairs that should be sent now and were not sent yet."""
     d = cfg.get("digest", {})

@@ -7,7 +7,7 @@ import shutil
 import subprocess
 import sys
 
-from . import __version__, config, db, notify
+from . import __version__, config, db, notify, pace
 
 UNIT = "telegram-stories.service"
 
@@ -47,6 +47,7 @@ def status_text(con, cfg) -> str:
              + (" · STOPPED (kill switch)" if kill else "")
              + (" · paused by Telegram flood limit" if breaker > db.now() else ""),
              "rules: " + (", ".join(f"{k} {v}" for k, v in sorted(rules.items())) or "none"),
+             "pace: " + pace.describe(con, cfg),
              f"automatic messages sent in 24 h: {day}"]
     return "\n".join(lines)
 
@@ -87,7 +88,8 @@ def run(cfg: dict, online: bool = True) -> int:
     if age is None:
         out.append(_line(None, "last poll", "never"))
     else:
-        out.append(_line(age < 300 or None, "last poll", f"{age // 60} min ago"))
+        out.append(_line(pace.poll_age_ok(con, cfg, age) or None, "last poll",
+                         f"{age // 60} min ago ({pace.describe(con, cfg)})"))
     n_st = con.execute("SELECT COUNT(*), SUM(backfilled_at IS NOT NULL), SUM(list_available=1) FROM stories "
                        "WHERE peer_id=?", (owner or 0,)).fetchone()
     n_views = con.execute("SELECT COUNT(*) FROM views").fetchone()[0]

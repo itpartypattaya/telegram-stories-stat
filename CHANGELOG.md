@@ -4,6 +4,22 @@
 
 All notable changes of the skill. Versions follow `plugin.json` and `SKILL.md`. Newest first.
 
+## 1.4.0 — 2026-10-06
+
+### Changed
+
+- **The service checks hourly when no rule is active.** With at least one active rule (a message, a
+  notification, a segment that fills itself), the service checks each minute as before. Activating a rule brings
+  the minute pace back in less than a minute. `poll.idle_s` sets the slow interval (3600 by default); `0` keeps
+  the minute pace always.
+- The pulse reads its story again right before it goes, and a summary reads the active stories, so the numbers
+  are fresh at the hourly pace too.
+- Tables and the dashboard read Telegram first if the data is older than 5 minutes. `--no-sync` skips this.
+- `stories.py sync` (and the refresh before a table) sends the new views through the rules, as the service does.
+  Before, a manual pass could hide new viewers from an active rule.
+- The service writes an "alive" mark each minute (`state.alive_at`), apart from the time of the last poll, for
+  watchdogs. `doctor` and `status` name the current pace and accept an older last poll at the hourly pace.
+
 ## 1.3.0 — 2026-10-06
 
 ### Added

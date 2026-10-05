@@ -25,6 +25,7 @@ DEFAULTS: dict = {
     "locale": "en",            # en | ru — table headers and report phrases
     "channels": [],            # ["@channel"] — channel stories (counts only: Telegram hides channel viewers)
     "poll": {
+        "idle_s": 3600,             # no active rule: check this often instead (0 = always at full speed)
         "counters_s": 60,           # view counters of active stories
         "new_stories_s": 300,       # look for newly posted stories
         "pinned_s": 1800,           # profile (pinned) stories keep collecting views after 48 h

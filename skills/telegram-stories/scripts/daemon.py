@@ -19,11 +19,12 @@ import asyncio
 import logging
 import signal
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from tgstories import chats, config, db, notify, reports, tg  # noqa: E402
+from tgstories import chats, config, db, notify, pace, reports, tg  # noqa: E402
 from tgstories.collector import Collector, ingest_private_message  # noqa: E402
 from tgstories.rules import Engine  # noqa: E402
 from tgstories.sender import Sender  # noqa: E402
@@ -47,7 +48,10 @@ def _lock():
     return fh
 
 
-async def every(seconds: float, fn, name: str, stop: asyncio.Event):
+async def every(interval, fn, name: str, stop: asyncio.Event, tick: float = 60):
+    """Run fn, then wait `interval` seconds. `interval` may be a function: it is asked again every `tick`
+    seconds of the wait, so a change of pace (a rule was activated) takes effect within a minute."""
+    get = interval if callable(interval) else (lambda: interval)
     while not stop.is_set():
         try:
             await fn()
@@ -60,10 +64,15 @@ async def every(seconds: float, fn, name: str, stop: asyncio.Event):
                                       "UserDeactivatedError", "UserDeactivatedBanError"):
                 raise
             log.warning("%s: %s: %s", name, type(exc).__name__, exc)
-        try:
-            await asyncio.wait_for(stop.wait(), timeout=seconds)
-        except asyncio.TimeoutError:
-            pass
+        began = time.monotonic()
+        while not stop.is_set():
+            left = get() - (time.monotonic() - began)
+            if left <= 0:
+                break
+            try:
+                await asyncio.wait_for(stop.wait(), timeout=min(left, tick))
+            except asyncio.TimeoutError:
+                pass
 
 
 SESSION_GONE = {"AuthKeyUnregisteredError", "SessionRevokedError", "AuthKeyDuplicatedError", "SessionExpiredError",
@@ -177,17 +186,22 @@ async def main() -> int:
     async def chat_segments():
         await chats.refresh_all(api, con)     # nothing to do without chat segments: one query
 
+    async def refresh(ids):
+        # a pulse re-reads its story, a digest the active ones: at the hourly pace the lists can be an hour old
+        await col.poll_counters(col.active_ids() if ids is None else ids, force_lists=ids is not None)
+        db.set_state(con, "last_poll_at", db.now())
+
     async def report():
-        # marked as sent only after a confirmed delivery; a failed one is tried again next minute
-        # (pulses stay due for 6 hours, a digest for the rest of its day)
-        for sid in reports.due_pulses(con, cfg, me.id):
-            text = reports.pulse_text(con, cfg, story_ref=str(sid), peer_id=me.id)
-            if await alert(text):
-                con.execute("UPDATE stories SET pulse_sent_at=? WHERE peer_id=? AND story_id=?",
-                            (db.now(), me.id, sid))
-        for key, period in reports.due_digests(con, cfg):
-            if await alert(reports.digest_text(con, cfg, period=period, peer_id=me.id)):
-                reports.mark_sent(con, key)
+        await reports.send_due(con, cfg, me.id, alert, refresh)
+
+    async def heartbeat():
+        # "alive" for watchdogs, apart from "last poll": at the hourly pace a poll can be an hour old
+        if client.is_connected():
+            db.set_state(con, "alive_at", db.now())
+        db.set_state(con, "poll_interval_s", int(pace.interval(con, cfg, poll.get("counters_s", 60))))
+
+    def at(base):
+        return lambda: pace.interval(con, cfg, base)
 
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGTERM, signal.SIGINT):
@@ -200,16 +214,17 @@ async def main() -> int:
     log.info("telegram-stories service started for %s (premium: %s); %d active stories",
              me.username or me.id, bool(getattr(me, "premium", False)), len(col.active_ids()))
     tasks = [
-        asyncio.create_task(every(poll.get("counters_s", 60), counters, "counters", stop)),
-        asyncio.create_task(every(poll.get("new_stories_s", 300), new_stories, "new_stories", stop)),
-        asyncio.create_task(every(poll.get("pinned_s", 1800), pinned, "pinned", stop)),
+        asyncio.create_task(every(at(poll.get("counters_s", 60)), counters, "counters", stop)),
+        asyncio.create_task(every(at(poll.get("new_stories_s", 300)), new_stories, "new_stories", stop)),
+        asyncio.create_task(every(at(poll.get("pinned_s", 1800)), pinned, "pinned", stop)),
         asyncio.create_task(every(15, send, "sender", stop)),
-        asyncio.create_task(every(poll.get("chat_segments_s", 900), chat_segments, "chat_segments", stop)),
+        asyncio.create_task(every(at(poll.get("chat_segments_s", 900)), chat_segments, "chat_segments", stop)),
         asyncio.create_task(every(60, report, "reports", stop)),
+        asyncio.create_task(every(60, heartbeat, "heartbeat", stop)),
     ]
     if cfg.get("channels"):
-        tasks.append(asyncio.create_task(every(poll.get("channels_s", 900), channels, "channels", stop)))
-        tasks.append(asyncio.create_task(every(poll.get("channel_stats_s", 3600), channel_stats, "channel_stats",
+        tasks.append(asyncio.create_task(every(at(poll.get("channels_s", 900)), channels, "channels", stop)))
+        tasks.append(asyncio.create_task(every(at(poll.get("channel_stats_s", 3600)), channel_stats, "channel_stats",
                                                stop)))
     disconnected = asyncio.ensure_future(client.disconnected)  # Telethon reconnects by itself; this fires for good
     stopper = asyncio.create_task(stop.wait())

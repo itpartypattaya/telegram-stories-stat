@@ -15,9 +15,11 @@
   stories.py dashboard [--out FILE] [--period 30d|90d|1y|all] [--no-thumbs]   one-file HTML page
   stories.py notify-test
 
-Table and report commands only read SQLite and work on any Python >= 3.10.
-Commands that talk to Telegram need Telethon; if it is missing here, the
-command re-runs itself with the interpreter the installer recorded.
+Table and report commands read SQLite and work on any Python >= 3.10. Tables
+and the dashboard first re-read Telegram when the data is older than five
+minutes (with no active rule the service checks only hourly); `--no-sync`
+skips that. Commands that talk to Telegram need Telethon; if it is missing
+here, the command re-runs itself with the interpreter the installer recorded.
 """
 from __future__ import annotations
 
@@ -33,6 +35,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from tgstories import __version__, config, db  # noqa: E402
 
 TELEGRAM_COMMANDS = {"login", "sync", "backfill", "notify-test"}
+FRESH_COMMANDS = {"table", "dashboard"}      # re-read Telegram first when the data is old
 
 
 def _reexec_with_recorded_python() -> None:
@@ -50,6 +53,47 @@ def _reexec_with_recorded_python() -> None:
         os.execv(py, [py, str(Path(__file__).resolve()), *sys.argv[1:]])
     from tgstories import tg
     tg.require_telethon()
+
+
+def _has_telethon_or_reexec() -> bool:
+    """True when Telethon is importable here; otherwise re-run with the recorded interpreter (does not return),
+    or False when there is none — then the command works on the stored data."""
+    try:
+        import telethon  # noqa: F401
+        return True
+    except ImportError:
+        pass
+    try:
+        py = db.get_meta(db.connect(create=False), "python")
+    except SystemExit:
+        py = None
+    if py and Path(py).exists() and Path(py).resolve() != Path(sys.executable).resolve():
+        os.execv(py, [py, str(Path(__file__).resolve()), *sys.argv[1:]])
+    return False
+
+
+def freshen(cfg, run=None) -> bool:
+    """Re-read Telegram when the last poll is older than five minutes. A failure only prints a note to stderr:
+    the stored data is shown anyway. Returns True when a pass ran."""
+    from tgstories import pace
+    try:
+        con = db.connect(create=False)
+    except SystemExit:
+        return False
+    if not pace.stale(con):
+        return False
+    if run is None:
+        from tgstories import collector
+        run = collector.run_once
+    try:
+        asyncio.run(run(cfg))
+        return True
+    except (Exception, SystemExit) as exc:  # noqa: BLE001 — a table without the newest views beats no table
+        from datetime import datetime
+        last = int(db.get_state(con, "last_poll_at", "0") or 0)
+        when = datetime.fromtimestamp(last).strftime("%d.%m %H:%M") if last else "never"
+        print(f"note: could not refresh from Telegram ({type(exc).__name__}); data as of {when}", file=sys.stderr)
+        return False
 
 
 # ── handlers ───────────────────────────────────────────────────────────────
@@ -191,6 +235,7 @@ def build_parser() -> argparse.ArgumentParser:
     tb.add_argument("--format", default="md", choices=["md", "csv", "json", "text"])
     tb.add_argument("--limit", type=int)
     tb.add_argument("--sort", help="people/story: column to sort by")
+    tb.add_argument("--no-sync", action="store_true", help="do not re-read Telegram first, even if the data is old")
     tb.set_defaults(func=cmd_table)
 
     rp = sub.add_parser("report", help="pulse / digest text")
@@ -230,6 +275,7 @@ def build_parser() -> argparse.ArgumentParser:
     ds.add_argument("--out", help="file to write (default: <data dir>/dashboard/dashboard.html)")
     ds.add_argument("--period", choices=["30d", "90d", "1y", "all"], help="tab open by default")
     ds.add_argument("--no-thumbs", action="store_true", help="leave story thumbnails out (smaller file)")
+    ds.add_argument("--no-sync", action="store_true", help="do not re-read Telegram first, even if the data is old")
     ds.set_defaults(func=cmd_dashboard)
 
     nt = sub.add_parser("notify-test", help="send a test notification")
@@ -250,7 +296,16 @@ def main(argv=None) -> int:
             or (args.cmd == "segment" and (args.action == "refresh" or (args.action == "create" and
                                                                      args.kind == "chat"))):
         _reexec_with_recorded_python()
+    fresh = False
+    if args.cmd in FRESH_COMMANDS and not args.no_sync:
+        try:
+            from tgstories import pace
+            fresh = pace.stale(db.connect(create=False)) and _has_telethon_or_reexec()
+        except SystemExit:
+            fresh = False
     cfg = config.load_config()
+    if fresh:
+        freshen(cfg)
     return int(args.func(args, cfg) or 0)
 
 

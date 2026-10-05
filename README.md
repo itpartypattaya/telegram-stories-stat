@@ -337,6 +337,16 @@ Telegram does not report new views. For this reason, the service checks the stor
 | each 5 minutes | new stories |
 | each 30 minutes | stories pinned to the profile (for the first 30 days) |
 
+These numbers apply while at least one rule is active. **With no active rule, the service checks each hour.**
+When you activate a rule, the service goes back to the minute pace in less than a minute. At the hourly pace,
+nothing is lost:
+
+- The pulse and the summaries read their stories again right before they go.
+- Tables and the dashboard read Telegram first if the data is older than 5 minutes (`--no-sync` skips this).
+- Replies to stories arrive as messages, and the service records them at once.
+
+To keep the minute pace always, set `poll.idle_s: 0` in the config.
+
 The history import reads the story archive. Example: 209 stories and 30,110 views loaded in approximately
 14 minutes.
 

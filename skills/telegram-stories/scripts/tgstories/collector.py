@@ -409,16 +409,37 @@ async def _open(cfg):
     return client, con, me
 
 
+async def sync(api, con, cfg: dict, owner_id: int) -> tuple[int, int]:
+    """One pass outside the service: new stories, counters, viewer lists → (active stories, new viewers).
+
+    Views found here go through the rules engine exactly as in the service: the service sees no growth
+    afterwards, so a pass that skipped the engine would swallow the events an active rule is waiting for."""
+    from .rules import Engine
+    from .sender import Sender
+    engine, guard = Engine(con, cfg), Sender(api, con, cfg)
+
+    def on_event(kind, row):
+        try:
+            engine.on_event(kind, row)
+            if kind in ("view", "view_changed") and (row.get("hidden_from") or row.get("blocked")):
+                guard.on_hidden(row["user_id"])
+        except Exception:  # noqa: BLE001
+            log.exception("rules engine")
+
+    col = Collector(api, con, cfg, owner_id, on_view=on_event)
+    await col.refresh_active()
+    ids = col.active_ids()
+    found = await col.poll_counters(ids)
+    db.set_state(con, "last_poll_at", db.now())
+    return len(ids), found
+
+
 async def run_once(cfg: dict, verbose: bool = False) -> int:
     client, con, me = await _open(cfg)
     try:
-        col = Collector(tg.Api(client), con, cfg, me.id)
-        await col.refresh_active()
-        ids = col.active_ids()
-        found = await col.poll_counters(ids)
-        db.set_state(con, "last_poll_at", db.now())
+        n, found = await sync(tg.Api(client), con, cfg, me.id)
         if verbose:
-            print(f"{len(ids)} active stories, {found} new viewer(s)")
+            print(f"{n} active stories, {found} new viewer(s)")
         return 0
     finally:
         await client.disconnect()

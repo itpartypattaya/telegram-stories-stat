@@ -1,7 +1,7 @@
 ---
 name: telegram-stories
 description: "Telegram stories: who viewed, stats tables, auto-replies."
-version: 1.3.0
+version: 1.4.0
 author: "Anton Vaskov (itpartypattaya), https://t.me/passone"
 license: MIT
 compatibility: Hermes Agent >= 0.21 (written against 0.21.5); Python 3.10+; Telethon 1.40+ (tested 1.44)
@@ -12,8 +12,8 @@ tags: [telegram, stories, analytics, telethon, autoresponder]
 
 # Telegram Stories Skill
 
-Collects who viewed the owner's Telegram stories and when (live, every minute, plus the whole history
-Telegram still keeps), answers with ready statistics tables, and can send opt-in automatic messages to
+Collects who viewed the owner's Telegram stories and when (every minute while a rule is active, hourly
+otherwise, plus the whole history Telegram still keeps), answers with ready statistics tables, and can send opt-in automatic messages to
 viewers by rules. A background service does the collecting and sending; it never calls a language model.
 It does not post stories, does not read anyone's chats and cannot show who viewed a channel's stories
 (Telegram does not reveal that to anyone).
@@ -41,7 +41,8 @@ It does not post stories, does not read anyone's chats and cannot show who viewe
 ## How to Run
 
 All commands: `python3 "${HERMES_SKILL_DIR}/scripts/stories.py" <command>` via `terminal`.
-Table and report commands only read the local database (fast, no Telegram calls). Commands that talk to
+Table and report commands read the local database; tables and the dashboard first re-read Telegram when
+the data is older than 5 minutes (a few seconds; `--no-sync` skips it). Commands that talk to
 Telegram re-run themselves with the interpreter that has Telethon.
 
 ## Quick Reference
@@ -57,7 +58,7 @@ Telegram re-run themselves with the interpreter that has Telethon.
 | Pulse / digest text | `report pulse last` · `report digest --period 7d` |
 | Full CSV | `export views --period 90d` · `export people` · `export stories` |
 | Dashboard: one HTML page, charts, viewer lists | `dashboard` · `dashboard --period 1y` (tab open first) |
-| Fresh data now | `sync` (the service does it every minute anyway) |
+| Fresh data now | `sync` (tables and the dashboard do it themselves when the data is old) |
 | Health | `doctor` · `status` |
 | Stop all automatic messages | `stop` (resume: `start`) |
 | Rules | `rule template` · `rule create --json '…'` · `rule preview N` · `rule activate N --confirm D` · `rule show N` · `rule pause N` |
@@ -115,7 +116,8 @@ command.
 
 ## Verification
 
-- `stories.py doctor` → `ok` for database, session, service, last poll under 5 minutes.
+- `stories.py doctor` → `ok` for database, session, service, last poll (under ~10 minutes with an active
+  rule, under ~70 without: the service then checks hourly; `status` names the pace).
 - `stories.py table story last` lists viewers; the header's 👁 equals Telegram's view count
   (minus incognito viewers).
 - After `rule create`: `rule show N` lists `shadow` deliveries, `status` shows 0 messages sent.
