@@ -80,11 +80,8 @@ def story(con, peer_id: int, story_id: int, baseline_n: int = 20) -> dict:
             comp["other"] += 1
         if r["close_friend"]:
             comp["close_friend"] += 1
-    prev = con.execute("SELECT story_id, views FROM stories WHERE peer_id=? AND deleted=0 AND posted_at<? "
-                       "AND views IS NOT NULL ORDER BY posted_at DESC LIMIT ?",
-                       (peer_id, posted, baseline_n)).fetchall()
-    base = median([p["views"] for p in prev])
     views = s["views"] if s["views"] is not None else len(rows)
+    base, views_for_index = fair_baseline(con, peer_id, s, views, len(rows), baseline_n)
     tail = sum(1 for x in lags if x > 48 * HOUR)
     return {
         "story": dict(s),
@@ -99,10 +96,27 @@ def story(con, peer_id: int, story_id: int, baseline_n: int = 20) -> dict:
         "composition": comp,
         "new_viewers": sum(1 for r in rows if r["first_time"]),
         "baseline": base,
-        "index": (views / base) if base else None,
+        "index": (views_for_index / base) if base else None,
+        "young": young(s),
         "tail_after_48h": tail,
         "list_available": s["list_available"],
     }
+
+
+def young(s) -> bool:
+    """Still inside its first 48 hours: its counter is not final yet."""
+    return bool(s["posted_at"]) and db.now() - s["posted_at"] < 48 * HOUR
+
+
+def fair_baseline(con, peer_id: int, s, views: int, listed: int, n: int = 20) -> tuple:
+    """(baseline, value to compare). A story younger than 48 h is compared with earlier stories at the
+    same age (from their viewer timestamps); a finished one — with their final counters."""
+    if young(s) and s["list_available"] != 0:
+        age_h = max(0.25, (db.now() - s["posted_at"]) / HOUR)
+        return baseline_at(con, peer_id, s["posted_at"], age_h, n), listed
+    prev = con.execute("SELECT views FROM stories WHERE peer_id=? AND deleted=0 AND posted_at<? "
+                       "AND views IS NOT NULL ORDER BY posted_at DESC LIMIT ?", (peer_id, s["posted_at"], n)).fetchall()
+    return median([p[0] for p in prev]), views
 
 
 def story_at(con, peer_id: int, story_id: int, hours: float) -> int | None:
@@ -132,15 +146,12 @@ def stories_in(con, peer_id: int, start: int, end: int) -> list[dict]:
         first_hour = story_at(con, peer_id, s["story_id"], 1)
         replies = con.execute("SELECT COUNT(*) FROM story_replies WHERE peer_id=? AND story_id=?",
                               (peer_id, s["story_id"])).fetchone()[0]
-        prev = con.execute("SELECT views FROM stories WHERE peer_id=? AND deleted=0 AND posted_at<? "
-                           "AND views IS NOT NULL ORDER BY posted_at DESC LIMIT 20",
-                           (peer_id, s["posted_at"])).fetchall()
-        base = median([p[0] for p in prev])
         views = s["views"] if s["views"] is not None else listed
+        base, compare = fair_baseline(con, peer_id, s, views, listed)
         out.append({**dict(s), "views": views, "replies": replies,
                     "first_hour": first_hour, "first_hour_share": (first_hour / listed) if listed and
                     first_hour is not None else None,
-                    "index": (views / base) if base else None})
+                    "index": (compare / base) if base else None, "young": young(s)})
     return out
 
 

@@ -72,6 +72,13 @@ class TablesTest(unittest.TestCase):
             self.assertNotIn("](", tb.to_text())
             json.loads(tb.to_json())
 
+    def test_caption_cut_never_splits_links_or_usernames(self):
+        cut = tables.caption_cut
+        self.assertEqual(cut("Read https://example.com/very/long/path today", 40), "Read 🔗 today")
+        self.assertEqual(cut("⚡️ Обмен тут: @it_exchange_pattaya_bot и в чате", 28), "⚡️ Обмен тут…")
+        self.assertNotIn("@it_exchange", cut("⚡️ Обмен тут: @it_exchange_pattaya_bot и в чате", 28))
+        self.assertEqual(cut("short", 28), "short")
+
     def test_plain_fallback(self):
         md = "**T**\n\n| a | b |\n|---|---:|\n| [@x](https://t.me/x) | 2 |"
         plain = notify.to_plain(md)

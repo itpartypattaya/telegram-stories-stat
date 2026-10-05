@@ -15,7 +15,7 @@ deleted accounts, so it can be a little higher).
 | 1h / 6h / 24h / 48h | Listed viewers whose first view came within N hours of posting. |
 | Time | First time Telegram reported this viewer (later re-views are kept in `view_events`). |
 | After | Time between posting and that first view. |
-| vs usual | Views ÷ median views of the previous 20 stories, as ±%. |
+| vs usual | Finished story: views ÷ median views of the previous 20 stories, as ±%. A story younger than 48 h (marked ⏳) is still collecting views, so it is compared fairly: listed viewers so far ÷ median of the previous 20 stories at the same age. |
 | new viewers | Listed viewers who had never viewed any earlier story. |
 | 👥 / 📇 / · / ⭐ | Mutual contact / contact / not a contact / on the owner's Close Friends list. |
 

@@ -17,6 +17,9 @@ STRINGS = {
         "new_viewers": "New viewers", "lost_viewers": "Stopped viewing", "active_30d": "Active audience (30 d)",
         "posted": "Posted", "reach": "Reach", "at": "after", "h": "h", "m": "m", "d": "d",
         "viewers_hidden": "Telegram did not return the viewer list for this story",
+        "channel_viewers_hidden": "Telegram does not show who viewed channel stories — counts, reactions and "
+                                  "reposts only",
+        "young_note": "still collecting views: compared with earlier stories at the same age",
         "no_data": "No data yet.", "period": "Period", "list_note": "listed viewers",
         "story_header": "Story", "summary_header": "Stories summary", "people_header": "Audience",
         "hours_header": "When people watch", "days_header": "By weekday", "compare_header": "Comparison",
@@ -42,6 +45,9 @@ STRINGS = {
         "active_30d": "Активная аудитория (30 дн)",
         "posted": "Опубликована", "reach": "Охват", "at": "через", "h": "ч", "m": "м", "d": "д",
         "viewers_hidden": "Telegram не отдал список зрителей этой сторис",
+        "channel_viewers_hidden": "Кто смотрел сторис канала, Telegram не показывает — только счётчики, реакции "
+                                  "и репосты",
+        "young_note": "ещё набирает просмотры: сравнение с другими сторис в том же возрасте",
         "no_data": "Пока нет данных.", "period": "Период", "list_note": "зрителей в списке",
         "story_header": "Сторис", "summary_header": "Сводка по сторис", "people_header": "Аудитория",
         "hours_header": "Когда смотрят", "days_header": "По дням недели", "compare_header": "Сравнение",

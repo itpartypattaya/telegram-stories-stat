@@ -33,6 +33,22 @@ def cut(text, n: int) -> str:
     return text if len(text) <= n else text[: n - 1].rstrip() + "…"
 
 
+_URL = re.compile(r"(https?://|www\.|t\.me/)\S+", re.IGNORECASE)
+
+
+def caption_cut(text, n: int) -> str:
+    """A caption shortened for a table cell. Links become 🔗 and the cut never lands inside a word:
+    Telegram auto-links what looks like a URL or @username, and half of one would link somewhere else."""
+    text = _URL.sub("🔗", (text or "").replace("\n", " "))
+    text = re.sub(r"\s+", " ", text).strip()
+    if len(text) <= n:
+        return text
+    head = text[: n - 1]
+    if " " in head and not text[n - 1].isspace():
+        head = head[: head.rfind(" ")]
+    return head.rstrip(" ,.;:—-") + "…"
+
+
 @dataclass
 class Col:
     key: str
@@ -229,10 +245,10 @@ def story_table(con, cfg, peer_id: int, ref) -> Table:
              f"{fmt_time(s['posted_at'], tz, s['posted_at'])} · {icon} {kind}").strip()
     notes = []
     if s.get("caption"):
-        notes.append("_" + md_escape(cut(s["caption"], 120)) + "_")
+        notes.append("_" + md_escape(caption_cut(s["caption"], 120)) + "_")
     line = f"👁 {m['views']} · ❤ {m['reactions']} · 💬 {m['replies']} · ↪ {m['forwards']}"
     if m["index"] is not None:
-        line += f" · {t(cfg, 'index')} {fmt_index(m['index'])}"
+        line += f" · {t(cfg, 'index')} {fmt_index(m['index'])}" + (" ⏳" if m.get("young") else "")
     notes.append(line)
     if m["listed"]:
         at = m["at"]
@@ -278,14 +294,16 @@ def summary_table(con, cfg, peer_id: int, start: int, end: int) -> Table:
             Col("views", "👁", "right"), Col("reactions", "❤", "right"), Col("replies", "💬", "right"),
             Col("first_hour", t(cfg, "first_hour"), "right"), Col("index", t(cfg, "index"), "right")]
     tb = Table(cols=cols, title=title, notes=notes)
+    if any(s.get("young") for s in sm["items"]):
+        tb.footer.append("_⏳ " + md_escape(t(cfg, "young_note")) + "_")
     for s in sm["items"]:
         icon = MEDIA_ICON.get(s.get("media_kind") or "", "")
-        caption = md_escape(cut(s.get("caption") or "", 28))
+        caption = md_escape(caption_cut(s.get("caption") or "", 28))
         fh = s.get("first_hour_share")
         tb.rows.append({"id": s["story_id"], "date": fmt_date(s["posted_at"], tz), "story": f"{icon} {caption}".strip(),
                         "views": s["views"] if s["views"] is not None else "", "reactions": s.get("reactions") or 0,
                         "replies": s["replies"], "first_hour": f"{round(fh * 100)}%" if fh is not None else "",
-                        "index": fmt_index(s["index"])})
+                        "index": fmt_index(s["index"]) + (" ⏳" if s.get("young") and s["index"] else "")})
         tb.plain.append({"story_id": s["story_id"], "posted_at": iso(s["posted_at"], tz),
                          "media": s.get("media_kind") or "", "caption": s.get("caption") or "",
                          "views": s["views"], "viewers_listed": s.get("viewers_listed") or 0,
@@ -382,11 +400,11 @@ def channel_table(con, cfg, peer_id: int, start: int, end: int) -> Table:
     title = f"**{t(cfg, 'channel_header')}** · {md_escape(peer['title'] if peer else peer_id)}"
     cols = [Col("id", t(cfg, "id"), "right"), Col("date", t(cfg, "date")), Col("story", t(cfg, "story")),
             Col("views", "👁", "right"), Col("reactions", "❤", "right"), Col("forwards", "↪", "right")]
-    tb = Table(cols=cols, title=title, notes=["_" + md_escape(t(cfg, "viewers_hidden")) + "_"])
+    tb = Table(cols=cols, title=title, notes=["_" + md_escape(t(cfg, "channel_viewers_hidden")) + "_"])
     for s in rows:
         icon = MEDIA_ICON.get(s.get("media_kind") or "", "")
         tb.rows.append({"id": s["story_id"], "date": fmt_date(s["posted_at"], tz, True),
-                        "story": f"{icon} {md_escape(cut(s.get('caption') or '', 28))}".strip(),
+                        "story": f"{icon} {md_escape(caption_cut(s.get('caption') or '', 28))}".strip(),
                         "views": s.get("views") or 0, "reactions": s.get("reactions") or 0,
                         "forwards": s.get("forwards") or 0})
         tb.plain.append({"story_id": s["story_id"], "posted_at": iso(s["posted_at"], tz),
