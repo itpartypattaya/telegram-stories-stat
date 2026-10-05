@@ -1,5 +1,9 @@
 # telegram-stories-stat
 
+**English** · [Русский](README.ru.md)
+
+![telegram-stories-stat](docs/cover.jpg)
+
 **Who watched your Telegram stories, when, and what to do about it** — a skill for personal AI agents
 ([Hermes Agent](https://github.com/NousResearch/hermes-agent) first, any agent with a shell works).
 
@@ -55,35 +59,21 @@ Check everything any time: `install.py --check`.
 
 ## How it works
 
-```
-                 Telegram (MTProto)
-                        ▲
-                        │ 1 connection, ~3–5 requests/min
-┌───────────────────────┴───────────────────────────────┐
-│ daemon.py — the only long-running process (systemd)   │
-│  ├ poller:  counters → viewer lists on growth          │
-│  ├ listener: replies to stories, replies to messages   │
-│  ├ rules engine → queue → sender (all guards)          │
-│  └ reports: pulse 2 h after posting, weekly digest     │
-└───────────────────────┬───────────────────────────────┘
-                        ▼
-        SQLite (WAL) ~/.hermes/data/telegram-stories/stories.db
-                        ▲
-┌───────────────────────┴───────────────────────────────┐
-│ stories.py — CLI the agent runs: tables, reports,      │
-│ rules, segments, export. Reads SQLite; no Telegram     │
-│ calls for tables.                                      │
-└───────────────────────────────────────────────────────┘
-Notifications → your agent's Telegram bot (native tables) or your Saved Messages.
-```
+![Architecture: one service between Telegram and a SQLite database; the agent reads it through the CLI](docs/architecture.png)
+
+One background process (`daemon.py`) talks to Telegram over its own session and writes everything into
+SQLite. The agent never talks to Telegram for statistics — it runs `stories.py`, which reads the database
+and prints tables. Notifications go out through your agent's bot as native tables.
+
+![A story's life: counters every minute, the viewer list on growth, pulse at 2 hours, weekly digest](docs/story-life.png)
 
 - Telegram has no "someone viewed your story" event, so the service polls: one request per minute
   returns the counters of all active stories; the viewer list is read only when a counter grows, from
   the newest viewer down to the first one already stored. New stories are checked every 5 minutes,
   profile (pinned) stories every 30 minutes — they keep getting views after 48 hours.
 - History import walks the story archive and reads every list Telegram still returns. On a real
-  account: 209 stories since July 2023, viewer lists available from late August 2023, about 30,000
-  viewer rows, ~25 minutes with the default 2-second pause.
+  account: 209 stories since July 2023, viewer lists available from late August 2023, 30,110 viewer
+  rows, 861 seconds with the default 2-second pause.
 
 ### Processes and resources
 
@@ -102,8 +92,11 @@ Notifications → your agent's Telegram bot (native tables) or your Saved Messag
 
 `stories.py login` creates a new session named **"Hermes Stories"**. It is deliberate:
 
-1. **Isolated risk.** The service is the only part that may write to people on its own. If Telegram
-   ever limits or terminates that session, your phone and your agent's other sessions are untouched.
+1. **Its own off switch.** The service is the only part that may write to people on its own; ending its
+   session ends exactly that, and nothing else. Be precise about what this does **not** isolate: Telegram's
+   anti-spam limits (`PEER_FLOOD`, "can only write to mutual contacts") apply to the whole **account**, not
+   to one session. That is why the guards below exist — contacts-only by default, caps, a full stop on the
+   first anti-spam signal.
 2. **A kill switch in your pocket.** Telegram → Settings → Devices → "Hermes Stories" → Terminate, and
    the service loses access instantly — no server, no terminal.
 3. **No shared-key conflicts.** Two long-running programs on one session key are fragile; the same key
@@ -147,6 +140,8 @@ a **weekly digest** (Sunday 20:00 by default) plus a monthly one. Definitions:
 
 ## Automatic messages (opt-in)
 
+![A rule's life — shadow, preview, confirmed activation — and the guards checked before every message](docs/autoresponder.png)
+
 Off by default (`autoresponder.enabled: false`). A rule is *which stories × who × trigger × action ×
 limits*: "everyone who watches my next story", "only @alex", "people who reacted ❤", "my core
 audience". A new rule runs in **shadow mode** first — it records who would get the message and sends
@@ -171,6 +166,13 @@ viewer lists disappear 24 hours after a story expires; incognito viewers are not
 | `~/.hermes/data/telegram-stories/stories.db` | stories, viewers with times and reactions, profiles, rules, sent messages |
 | `~/.hermes/data/telegram-stories/thumbs/` | small story previews (`backfill --no-thumbs` to skip) |
 | `~/.hermes/data/telegram-stories/exports/` | CSV files you asked for |
+
+**How to look at the numbers.** Ask your agent in plain words — it runs the right table. Yourself, on
+the machine: `stories.py table …` prints the same tables; `stories.py export views|people|stories
+[--period 90d]` writes a CSV (UTF-8 with BOM, so Excel opens it correctly; set `tables.csv_delimiter`
+to `;` for spreadsheets in locales that use a decimal comma). Or open `stories.db` read-only in any
+SQLite viewer (DB Browser for SQLite, Datasette): the tables are `stories`, `views`, `people`,
+`people_history`, `story_replies`, `rules`, `deliveries`.
 
 This is personal data about the people who watch you. It stays on your machine; nothing is sent anywhere
 except to Telegram itself and to your own notification chat. Reply texts are not stored — only the fact
@@ -203,7 +205,7 @@ contacts-only default, the kill switch and the separate session you can terminat
 - **Files written:** the paths in the table above; a systemd user unit
   `~/.config/systemd/user/telegram-stories.service`; the env file (one or three keys).
 - **Processes:** one long-running service; the CLI on demand; `install.py` runs
-  `pip install "telethon>=1.36,<2" "qrcode>=7,<9"` only when they are missing (`--no-deps` to skip).
+  `pip install --upgrade "telethon>=1.40,<2" "qrcode>=7,<9"` only when they are missing (`--no-deps` to skip).
 - **Capabilities:** reads your stories, their viewers, reactions and replies; sends private messages
   only through active rules within the limits above; never posts, never joins chats, never pays.
 - **LLM:** none.
