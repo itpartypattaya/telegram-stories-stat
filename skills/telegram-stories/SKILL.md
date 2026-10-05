@@ -1,7 +1,7 @@
 ---
 name: telegram-stories
 description: "Telegram stories: who viewed, stats tables, auto-replies."
-version: 1.1.1
+version: 1.1.2
 author: "Anton Vaskov (itpartypattaya), https://t.me/passone"
 license: MIT
 compatibility: Hermes Agent >= 0.21 (written against 0.21.5); Python 3.10+; Telethon 1.40+ (tested 1.44)
@@ -74,9 +74,11 @@ Add `--format csv|json|text` to any table when Markdown is not wanted.
    `MEDIA:<path>`) and say so.
 4. Unsure which story the owner means: `table summary --period 7d` first, then `table story <id>`.
 
-**Automatic messages (rules).** See `references/rules.md` for the spec.
+**Automatic messages (rules).** See `references/rules.md` for the spec and ready recipes (lead magnet at
+the end of a series, "reply to get it", "tell me when @someone opens it", warm-up segments).
 1. Build the spec from the request (`rule template` shows the shape). Scope defaults to `contacts`;
-   use `dialog` or `all` only when the owner asked for it in so many words.
+   use `dialog` or `all` only when the owner asked for it in so many words. Rules that only notify the
+   owner (`action: notify`) or fill a segment write to nobody and work with the autoresponder off.
 2. `rule create --json '…'` — the rule starts in shadow mode (records who would get it, sends nothing).
 3. `rule preview N` and show the owner the preview **verbatim**, including the text, the scope, the limits
    and the "would send to" count.

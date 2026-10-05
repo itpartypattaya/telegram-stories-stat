@@ -366,6 +366,25 @@ class Collector:
             log.info("thumbnail for %s skipped: %s", story.id, type(exc).__name__)
 
 
+# ── incoming private messages ──────────────────────────────────────────────
+
+def ingest_private_message(con, owner_id: int, sender, *, user_id: int, msg_id: int, at: int, text_len: int,
+                           story_id: int | None) -> dict | None:
+    """Someone wrote to the owner. Their profile is stored first: a first-time viewer can reply to a story
+    before the next viewer-list read, and a rule must not skip them as unknown. Their dialog is marked as
+    existing, so a day-old "no dialog" answer cached by the sender does not hold against someone who has
+    just written. Returns the reply event for the rules engine when the message answers a story."""
+    row = tg.user_row(sender) if sender is not None else None
+    if row:
+        db.upsert_person(con, row)
+    con.execute("UPDATE people SET has_dialog=1, dialog_checked_at=? WHERE user_id=?", (db.now(), user_id))
+    if not story_id:
+        return None
+    con.execute("INSERT OR IGNORE INTO story_replies(peer_id,story_id,user_id,msg_id,at,length) VALUES(?,?,?,?,?,?)",
+                (owner_id, story_id, user_id, msg_id, at, text_len))
+    return {"peer_id": owner_id, "story_id": story_id, "user_id": user_id, "viewed_at": at}
+
+
 # ── entry points used by the CLI ───────────────────────────────────────────
 
 async def _open(cfg):

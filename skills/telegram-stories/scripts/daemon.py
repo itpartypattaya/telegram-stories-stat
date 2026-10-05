@@ -24,7 +24,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from tgstories import config, db, notify, reports, tg  # noqa: E402
-from tgstories.collector import Collector  # noqa: E402
+from tgstories.collector import Collector, ingest_private_message  # noqa: E402
 from tgstories.rules import Engine  # noqa: E402
 from tgstories.sender import Sender  # noqa: E402
 
@@ -135,13 +135,15 @@ async def main() -> int:
         msg = event.message
         uid = event.sender_id
         hdr = getattr(msg, "reply_to", None)
-        if type(hdr).__name__ == "MessageReplyStoryHeader":
-            story_id = int(getattr(hdr, "story_id", 0) or 0)
-            con.execute("INSERT OR IGNORE INTO story_replies(peer_id,story_id,user_id,msg_id,at,length) "
-                        "VALUES(?,?,?,?,?,?)", (me.id, story_id, uid, msg.id, int(msg.date.timestamp()),
-                                                len(msg.message or "")))
-            on_event("reply", {"peer_id": me.id, "story_id": story_id, "user_id": uid,
-                               "viewed_at": int(msg.date.timestamp())})
+        story_id = int(getattr(hdr, "story_id", 0) or 0) if type(hdr).__name__ == "MessageReplyStoryHeader" else None
+        try:
+            who = await event.get_sender()
+        except Exception:  # noqa: BLE001 — the profile is a bonus; the reply itself is still recorded
+            who = None
+        reply = ingest_private_message(con, me.id, who, user_id=uid, msg_id=msg.id, at=int(msg.date.timestamp()),
+                                       text_len=len(msg.message or ""), story_id=story_id)
+        if reply:
+            on_event("reply", reply)
         sender.on_reply(uid)
 
     async def counters():

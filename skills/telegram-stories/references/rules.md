@@ -27,7 +27,27 @@
 | `delay_s` | random delay range before sending (minimum 30 s); default from the config |
 | `valid_until` | `YYYY-MM-DD`; the rule stops matching after that day |
 
-`{first_name}` in a text is replaced with the recipient's first name.
+`{first_name}` in a text is replaced with the recipient's first name. Messages go out as plain text: a link
+is pasted as is (`https://…`), Markdown is not parsed, files and buttons cannot be attached.
+
+`audience.users` may name an @username nobody in the database has yet: the rule then matches that person
+by username the first time they view (the preview says so). A numeric Telegram id works too.
+
+## Recipes
+
+| Request | Spec |
+|---|---|
+| Lead magnet for whoever reaches the last story of a series | owner puts a marker such as `#guide` into the **last** story's caption; `stories: {mode: tag, tag: "#guide"}`, `trigger: view`, `action: dm` with the link. Activate **before** posting: people who viewed earlier are not messaged. Viewers who are not contacts need `scope: all` (10/day by default) |
+| "Reply to this story and I'll send the guide" | same `tag`, `trigger: reply`, `scope: dialog` — the person has just written to the owner, so this is not a cold message; 40/day by default. Any reply counts: the reply text is not read |
+| Tell me when @someone opens a story | `audience: {mode: users, users: ["@someone"]}`, `action: {type: notify}`, `delay_s: [30, 60]`. Works with the autoresponder switched off: it writes to nobody but the owner. The notification names the moment of the view |
+| Confirm to @someone in private that they saw a public notice | as above with `action: dm`, `scope: all` (or `contacts` if they are) — pair it with the notify rule to know as well |
+| Thank people who reacted | `trigger: reaction`, `audience: {mode: all}` (or `reacted` + `reactions: ["❤"]`), `scope: contacts` |
+| Warm-up: mark who watched story A, write to them after story B | rule 1: story A, `action: {type: segment, segment: "warm"}` (writes to nobody); rule 2: story B, `audience: {mode: segment, segment: "warm"}`, `action: dm` |
+| Greet first-time viewers yourself | `audience: {mode: new}`, `action: notify` — the owner decides whom to write to |
+
+Timing: active stories are checked every minute and new stories every 5 minutes; then the rule's delay
+(default 2–6 min, at least 30 s) and quiet hours apply — to owner notifications as well. Profile (pinned)
+stories younger than 30 days are checked every 30 minutes, so a rule on a pinned story keeps working.
 
 ## Life cycle
 

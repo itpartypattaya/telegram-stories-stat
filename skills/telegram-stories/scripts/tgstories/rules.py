@@ -104,7 +104,9 @@ def load_spec(args) -> dict:
     raise SystemExit("pass the rule as --json '{…}' or --file spec.json (see `rule template`)")
 
 
-def _resolve_users(con, refs) -> list[int]:
+def _resolve_users(con, refs, strict: bool = True) -> list[int]:
+    """@names and ids → ids. strict=False skips @names nobody in the database has yet: a rule may name
+    a person who has never viewed a story — they match by username the moment they first do."""
     ids = []
     for ref in refs:
         ref = str(ref).strip()
@@ -113,9 +115,17 @@ def _resolve_users(con, refs) -> list[int]:
             continue
         uid = user_by_username(con, ref)
         if uid is None:
-            raise SystemExit(f"{ref}: not in the database yet (they must have viewed a story at least once)")
+            if strict:
+                raise SystemExit(f"{ref}: not in the database yet (they must have viewed a story at least once)")
+            continue
         ids.append(uid)
     return ids
+
+
+def unseen_users(con, refs) -> list[str]:
+    """The @names of a rule that nobody in the database has yet."""
+    return [str(r).strip() for r in refs
+            if not str(r).strip().lstrip("-").isdigit() and user_by_username(con, r) is None]
 
 
 # ── matching ───────────────────────────────────────────────────────────────
@@ -143,10 +153,8 @@ def _audience_matches(con, spec, user_id, event) -> bool:
     if mode == "all":
         return True
     if mode == "users":
-        try:
-            return user_id in _resolve_users(con, a["users"])
-        except SystemExit:
-            return False
+        # the viewer's profile is stored before the event, so a first-time viewer resolves here
+        return user_id in _resolve_users(con, a["users"], strict=False)
     if mode == "segment":
         return user_id in segment_members(con, a["segment"])
     if mode == "reacted":
@@ -404,7 +412,9 @@ def _summary(con, cfg, rule) -> str:
     stories = {"ids": f"stories {st.get('ids')}", "next": "the next story you post"
                + (f" (bound: {rule['bound_story_id']})" if rule["bound_story_id"] else ""),
                "tag": f"stories whose caption contains {st.get('tag')!r}", "all": "every story"}[st["mode"]]
-    audience = {"all": "everyone", "users": f"only {', '.join(au.get('users', []))}",
+    unseen = unseen_users(con, au.get("users", [])) if au["mode"] == "users" else []
+    audience = {"all": "everyone", "users": f"only {', '.join(au.get('users', []))}"
+                + (f" ({', '.join(unseen)}: no views yet — matched by username at the first one)" if unseen else ""),
                 "segment": f"segment {au.get('segment')!r}", "reacted": "people who reacted"
                 + (f" with {''.join(au.get('reactions') or [])}" if au.get("reactions") else ""),
                 "new": "first-time viewers", "status": f"audience status {au.get('status')}"}[au["mode"]]
@@ -493,8 +503,6 @@ def cli(cfg, args) -> int:
         return 0
     if a == "create":
         spec = normalize(load_spec(args), cfg)
-        if spec["audience"]["mode"] == "users":
-            _resolve_users(con, spec["audience"]["users"])
         now = db.now()
         cur = con.execute("INSERT INTO rules(name,status,spec,digest,created_at,updated_at) VALUES(?,?,?,?,?,?)",
                           (spec["name"], "shadow", db.dumps(spec), digest(spec), now, now))

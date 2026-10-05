@@ -151,6 +151,10 @@ class Sender:
                                      (db.now() + 600, d["rule_id"], d["user_id"]))
                 continue
             if action["type"] == "segment":
+                # a rule may fill a segment nobody created by hand; without its row the segment would look
+                # empty to the rule that targets it, and that rule would quietly match no one
+                self.con.execute("INSERT OR IGNORE INTO segments(name,kind,created_at) VALUES(?,'static',?)",
+                                 (action["segment"], db.now()))
                 self.con.execute("INSERT OR IGNORE INTO segment_members(segment,user_id,added_at) VALUES(?,?,?)",
                                  (action["segment"], d["user_id"], db.now()))
                 self._mark(d, "sent", "segment")
@@ -290,11 +294,29 @@ class Sender:
         return False
 
     async def _notify_owner(self, d, person, rule) -> bool:
-        from .tables import name_cell, nick_cell
+        """«👀 Kate @kate · Story 221, 14:03 · rule «…»» — with the moment of the view (or reply) itself:
+        the notification may arrive later (delay, quiet hours), the time it names is when it happened."""
+        from . import i18n
+        from .tables import fmt_time, name_cell, nick_cell
         p = dict(person) if person else {"user_id": d["user_id"]}
         spec = json.loads(rule["spec"])
-        return await self._alert(f"👀 {name_cell(p, self.cfg)} {nick_cell(p, self.cfg) if p.get('username') else ''} — "
-                          f"story {d['story_id']} · rule «{spec['name']}»")
+        key = (d["peer_id"], d["story_id"], d["user_id"])
+        icon, at = "👀", None
+        if spec.get("trigger") == "reply":
+            icon = "💬"
+            at = self.con.execute("SELECT MAX(at) FROM story_replies WHERE peer_id=? AND story_id=? AND user_id=?",
+                                  key).fetchone()[0]
+        else:
+            v = self.con.execute("SELECT COALESCE(first_viewed_at, viewed_at) AS at, reaction FROM views "
+                                 "WHERE peer_id=? AND story_id=? AND user_id=?", key).fetchone()
+            if v is not None:
+                at = v["at"]
+                if spec.get("trigger") == "reaction" and v["reaction"]:
+                    icon = v["reaction"]
+        when = fmt_time(at or d["created_at"], config.get_tz(self.cfg), db.now())
+        nick = f" {nick_cell(p, self.cfg)}" if p.get("username") else ""
+        return await self._alert(f"{icon} {name_cell(p, self.cfg)}{nick} · {i18n.t(self.cfg, 'story')} "
+                                 f"{d['story_id']}, {when} · {i18n.t(self.cfg, 'rule')} «{spec['name']}»")
 
     def on_hidden(self, user_id: int) -> None:
         """A viewer hid our stories or blocked us after an automatic message → pause that rule."""
