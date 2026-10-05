@@ -64,7 +64,7 @@ def digest_text(con, cfg: dict, period: str = "7d", peer_id: int | None = None) 
     tb.rows = tb.rows[:10]
     parts = [tb.to_md()]
     ppl = analytics.people(con, peer_id)
-    new_core = [p for p in ppl if p["status"] == "core" and p.get("first") and p["first"] >= start - 60 * 86400][:5]
+    new_core = [p for p in ppl if p["status"] == "core" and p.get("first") and p["first"] >= end - 60 * 86400][:5]
     cooling = [p for p in ppl if p["status"] == "cooling"][:5]
     if new_core:
         parts.append(f"**{t(cfg, 'new_core')}:** " + ", ".join(

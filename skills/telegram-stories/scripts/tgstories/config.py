@@ -44,7 +44,7 @@ DEFAULTS: dict = {
     },
     "pulse": {"enabled": True, "after_hours": 2, "baseline_stories": 20},
     "digest": {"enabled": True, "weekday": 6, "time": "20:00", "monthly_day": 1},
-    "tables": {"max_rows": 150, "name_links": "never", "nick_links": "link"},
+    "tables": {"max_rows": 150, "name_links": "never", "nick_links": "link", "csv_delimiter": ","},
     "autoresponder": {
         "enabled": False,           # global switch; rules stay in shadow while false
         "default_scope": "contacts",  # contacts | dialog | all

@@ -141,8 +141,20 @@ CREATE INDEX IF NOT EXISTS deliveries_user ON deliveries(user_id, sent_at);
 CREATE TABLE IF NOT EXISTS notifications (key TEXT PRIMARY KEY, sent_at INTEGER);
 """
 
+SCHEMA_V2 = """
+-- the counters at the moment the viewer list was last read: growth is measured against these, not against
+-- the live counters that other refreshes keep overwriting (a refresh in between used to hide new viewers)
+ALTER TABLE stories ADD COLUMN listed_views INTEGER;
+ALTER TABLE stories ADD COLUMN listed_reactions INTEGER;
+-- the rule as it was when the delivery was queued: a changed rule never sends with an old queue
+ALTER TABLE deliveries ADD COLUMN rule_digest TEXT;
+-- the scope a message was actually sent under: caps count history, not the rule's current spec
+ALTER TABLE deliveries ADD COLUMN scope TEXT;
+"""
+
 MIGRATIONS: list[tuple[int, str]] = [
     (1, SCHEMA_V1),
+    (2, SCHEMA_V2),
 ]
 
 SCHEMA_VERSION = MIGRATIONS[-1][0]
@@ -229,6 +241,8 @@ def upsert_person(con, p: dict, *, ts: int | None = None) -> None:
             continue
         if c == "access_hash" and not v:
             continue  # a "min" user object carries no usable hash — keep the stored one
+        if v is None and c not in PEOPLE_TRACKED:
+            continue  # unknown is not "no": an incomplete profile never erases a known flag (paid_stars!)
         sets.append(f"{c}=?")
         vals.append(v)
     sets.append("updated_at=?")

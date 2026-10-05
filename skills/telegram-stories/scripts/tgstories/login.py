@@ -50,9 +50,15 @@ def _ensure_api_credentials(interactive: bool) -> None:
 
 async def _finish(client, cfg: dict) -> int:
     me = await client.get_me()
+    con = db.connect()
+    known = db.owner_id(con)
+    if known and known != me.id:
+        await client.log_out()   # do not leave a stray session behind on the other account
+        raise SystemExit(f"this data folder belongs to account {known}; you logged in as {me.id}. Its rules and "
+                         "queued messages must never be sent from another account — use a separate STORIES_HOME "
+                         "(and config) for the second account.")
     session_env = cfg.get("session_env") or "STORIES_SESSION_STRING"
     config.write_env_value(session_env, client.session.save())
-    con = db.connect()
     db.set_meta(con, "owner_id", me.id)
     db.set_meta(con, "owner_premium", int(bool(getattr(me, "premium", False))))
     db.set_meta(con, "login_at", db.now())

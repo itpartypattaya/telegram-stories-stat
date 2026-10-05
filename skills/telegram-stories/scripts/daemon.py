@@ -66,6 +66,21 @@ async def every(seconds: float, fn, name: str, stop: asyncio.Event):
             pass
 
 
+SESSION_GONE = {"AuthKeyUnregisteredError", "SessionRevokedError", "AuthKeyDuplicatedError", "SessionExpiredError",
+                "UserDeactivatedError", "UserDeactivatedBanError"}
+
+
+def run() -> int:
+    """Any loss of the session, at any stage, ends with exit 3 — systemd must not restart into the same error."""
+    try:
+        return asyncio.run(main())
+    except Exception as exc:  # noqa: BLE001
+        if type(exc).__name__ in SESSION_GONE:
+            log.error("the stories session is gone (%s) — log in again with `stories.py login`", type(exc).__name__)
+            return EXIT_SESSION_GONE
+        raise
+
+
 async def main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s", stream=sys.stdout)
     for noisy in ("telethon", "asyncio"):
@@ -79,16 +94,27 @@ async def main() -> int:
         log.error("%s", exc)
         return EXIT_SESSION_GONE
     me = await client.get_me()
+    known = db.owner_id(con)
+    if known and known != me.id:
+        # rules and queued messages in this database belong to another account — never send them from this one
+        log.error("this database belongs to account %s, but the session is account %s — use a separate "
+                  "STORIES_HOME for another account", known, me.id)
+        await client.disconnect()
+        return EXIT_SESSION_GONE
     db.set_meta(con, "owner_id", me.id)
     db.set_meta(con, "owner_premium", int(bool(getattr(me, "premium", False))))
     db.set_meta(con, "python", sys.executable)
     api = tg.Api(client)
     engine = Engine(con, cfg)
 
-    async def alert(md: str):
-        await notify.send_async(cfg, md, client)
+    async def alert(md: str) -> bool:
+        return await notify.send_async(cfg, md, client)
 
     sender = Sender(api, con, cfg, notify=alert)
+    stuck = sender.recover_interrupted()
+    if stuck:
+        log.warning("%d automatic message(s) were interrupted while sending last time — marked failed, not resent",
+                    stuck)
 
     def on_event(kind, row):
         try:
@@ -126,6 +152,7 @@ async def main() -> int:
         await col.refresh_active()
 
     async def pinned():
+        await col.refresh_pinned()     # new profile stories join the poll, every page
         ids = col.pinned_recent_ids()
         if ids:
             await col.poll_counters(ids)
@@ -144,13 +171,16 @@ async def main() -> int:
         await sender.run_once()
 
     async def report():
+        # marked as sent only after a confirmed delivery; a failed one is tried again next minute
+        # (pulses stay due for 6 hours, a digest for the rest of its day)
         for sid in reports.due_pulses(con, cfg, me.id):
             text = reports.pulse_text(con, cfg, story_ref=str(sid), peer_id=me.id)
-            con.execute("UPDATE stories SET pulse_sent_at=? WHERE peer_id=? AND story_id=?", (db.now(), me.id, sid))
-            await alert(text)
+            if await alert(text):
+                con.execute("UPDATE stories SET pulse_sent_at=? WHERE peer_id=? AND story_id=?",
+                            (db.now(), me.id, sid))
         for key, period in reports.due_digests(con, cfg):
-            reports.mark_sent(con, key)
-            await alert(reports.digest_text(con, cfg, period=period, peer_id=me.id))
+            if await alert(reports.digest_text(con, cfg, period=period, peer_id=me.id)):
+                reports.mark_sent(con, key)
 
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGTERM, signal.SIGINT):
@@ -204,4 +234,4 @@ async def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(asyncio.run(main()))
+    sys.exit(run())

@@ -108,7 +108,8 @@ class FakeApi:
         start = int(offset or 0)
         page = views[start:start + limit]
         nxt = str(start + limit) if start + limit < len(views) else ""
-        return SimpleNamespace(count=len(views), views_count=len(views), views=page, users=self.users,
+        return SimpleNamespace(count=len(views), views_count=len(views),
+                               reactions_count=sum(1 for v in views if v.reaction), views=page, users=self.users,
                                next_offset=nxt)
 
     async def archive(self, peer, offset_id=0, limit=100):

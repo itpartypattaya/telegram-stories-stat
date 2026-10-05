@@ -40,16 +40,34 @@ def unit_path() -> Path:
     return Path.home() / ".config" / "systemd" / "user" / UNIT_NAME
 
 
+TELETHON_PROBE = (
+    "import inspect, telethon\n"
+    "from telethon.tl import types\n"
+    "from telethon.tl.functions import stories\n"
+    "ok = hasattr(stories, 'GetStoryViewsListRequest') and 'send_paid_messages_stars' in "
+    "inspect.signature(types.User.__init__).parameters\n"
+    "print(telethon.__version__, 'ok' if ok else 'old')\n")
+
+
 def telethon_version(python: str) -> str | None:
+    """Version string if Telethon is importable AND new enough: it must know story viewer lists and the
+    paid-messages field of a user (layer ~200+), or the paid-message guard would silently see nothing."""
     try:
-        out = subprocess.run([python, "-c", "import telethon; print(telethon.__version__)"],
-                             capture_output=True, text=True, timeout=60)
-        return out.stdout.strip() if out.returncode == 0 else None
+        out = subprocess.run([python, "-c", TELETHON_PROBE], capture_output=True, text=True, timeout=60)
+        if out.returncode != 0:
+            return None
+        ver, state = (out.stdout.split() + ["", ""])[:2]
+        return ver if state == "ok" else None
     except Exception:  # noqa: BLE001
         return None
 
 
-DEP_TELETHON = "telethon>=1.36,<2"
+def systemd_quote(value: str) -> str:
+    """A single systemd command-line word / Environment= value, safe with spaces and quotes."""
+    return '"' + str(value).replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+DEP_TELETHON = "telethon>=1.40,<2"
 DEP_QRCODE = "qrcode>=7,<9"
 
 
@@ -101,8 +119,13 @@ def install_unit(python: str, start: bool) -> None:
                   f"{python} {SCRIPTS / 'daemon.py'} (e.g. in tmux or with nohup)")
         return
     text = (SKILL / "templates" / UNIT_NAME).read_text(encoding="utf-8")
-    text = (text.replace("@PYTHON@", python).replace("@SCRIPTS@", str(SCRIPTS))
-            .replace("@HERMES_HOME@", str(config.hermes_home())))
+    env_lines = [f"Environment={systemd_quote('HERMES_HOME=' + str(config.hermes_home()))}"]
+    for key in ("STORIES_HOME", "STORIES_CONFIG", "STORIES_ENV_FILE"):
+        if os.environ.get(key):   # overrides used at install time must reach the service too
+            env_lines.append(f"Environment={systemd_quote(key + '=' + os.environ.get(key))}")
+    text = (text.replace("@PYTHON@", systemd_quote(python))
+            .replace("@DAEMON@", systemd_quote(str(SCRIPTS / "daemon.py")))
+            .replace("@ENVIRONMENT@", chr(10).join(env_lines)))
     path = unit_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     changed = not path.exists() or path.read_text(encoding="utf-8") != text
@@ -186,11 +209,11 @@ def main() -> int:
     missing = ([DEP_TELETHON] if not ver else []) + ([DEP_QRCODE] if not has_qr else [])
     if missing and not args.no_deps:
         print("installing " + ", ".join(missing) + " …")
-        subprocess.run([python, "-m", "pip", "install", "--quiet", *missing], check=False)
+        subprocess.run([python, "-m", "pip", "install", "--quiet", "--upgrade", *missing], check=False)
         ver = telethon_version(python)
         has_qr = module_present(python, "qrcode")
     say(bool(ver) or None, f"telethon {ver} for {python}" if ver else
-        f"telethon missing for {python} — run without --no-deps (or install {DEP_TELETHON} yourself)")
+        f"telethon missing or too old for {python} — run without --no-deps (or install {DEP_TELETHON} yourself)")
     say(has_qr or None, "qrcode for the QR login" if has_qr else
         "qrcode missing — login falls back to phone + code")
 

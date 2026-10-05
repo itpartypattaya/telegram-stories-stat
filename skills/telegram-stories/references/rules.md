@@ -36,6 +36,12 @@ summary, a dry run over views already collected and a digest → `activate N --c
 **active**. The digest covers stories, audience, scope, trigger, action and limits; any change resets
 the rule to shadow. `pause` cancels queued messages; `delete` marks the rule done and keeps history.
 
+`next` binds to the first story posted **after activation** (a story posted while the rule was in shadow
+is never the target). Any update, pause or return to shadow cancels the rule's queued messages, and every
+queued message carries the rule's digest — it is sent only if the rule still has exactly that digest.
+Changes to `telegram-stories.json` (switching the autoresponder off, `never_message`, limits) reach the
+running service without a restart: it re-reads the file before every round of sending.
+
 ## Guards no rule can switch off
 
 1. `autoresponder.enabled` must be true in the config for any direct message.
@@ -52,6 +58,14 @@ the rule to shadow. `pause` cancels queued messages; `delete` marks the rule don
    pauses sending for that long; three failures in a row pause the rule.
 9. If a recipient hides the owner's stories or blocks the owner after an automatic message, the rule
    that wrote to them pauses and the owner is told.
+10. Right before each message the service fetches the recipient's current profile (contact status, Stars
+    price) and claims the message in one database transaction that re-checks the kill switch, the rule's
+    status and its digest. `stories.py stop` therefore stops everything except, at most, the one message
+    already handed to Telegram.
+11. A send whose outcome is unknown (timeout, dropped connection, crash) is recorded as failed and **never
+    repeated** — a second copy to a real person is worse than a missing one.
+12. A data folder belongs to one account: logging in with another account, or starting the service with a
+    session of another account, is refused — rules and queued messages never move between accounts.
 
 ## Why these limits
 

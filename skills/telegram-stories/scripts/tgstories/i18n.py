@@ -26,7 +26,7 @@ STRINGS = {
         "channel_header": "Channel stories", "more_rows": "more rows — full table in the CSV export",
         "pulse": "Pulse", "pulse_up": "above usual", "pulse_down": "below usual", "pulse_flat": "as usual",
         "digest": "Stories digest", "top": "Top stories", "best_hours": "Best hours to post",
-        "new_core": "New in the core", "cooling_people": "Cooling down",
+        "new_core": "In the core, first seen in the last 60 days", "cooling_people": "Cooling down",
         "weekdays": ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"],
     },
     "ru": {
@@ -54,7 +54,7 @@ STRINGS = {
         "channel_header": "Сторис канала", "more_rows": "строк ещё — полная таблица в CSV-выгрузке",
         "pulse": "Пульс", "pulse_up": "выше обычного", "pulse_down": "ниже обычного", "pulse_flat": "как обычно",
         "digest": "Сводка по сторис", "top": "Лучшие сторис", "best_hours": "Лучшее время публикации",
-        "new_core": "Новые в ядре", "cooling_people": "Остывают",
+        "new_core": "В ядре, впервые смотрели за последние 60 дней", "cooling_people": "Остывают",
         "weekdays": ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"],
     },
 }

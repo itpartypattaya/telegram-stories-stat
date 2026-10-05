@@ -17,6 +17,7 @@ from . import analytics, config, db
 from .i18n import t
 
 WHO_ICON = {"mutual": "👥", "contact": "📇", "other": "·"}
+MESSAGE_BUDGET = 30000   # characters of one table; Telegram rich messages hold 32 768
 MEDIA_ICON = {"photo": "📷", "video": "🎬", "document": "📄"}
 _MD_ESCAPE = re.compile(r"([\\`*_\[\]|<>~])")
 
@@ -87,10 +88,10 @@ class Table:
             out.extend(footer)
         return "\n".join(out)
 
-    def to_csv(self) -> str:
+    def to_csv(self, delimiter: str = ",") -> str:
         buf = io.StringIO()
         keys = list(self.plain[0].keys()) if self.plain else [c.key for c in self.cols]
-        w = csv.DictWriter(buf, fieldnames=keys, extrasaction="ignore", lineterminator="\n")
+        w = csv.DictWriter(buf, fieldnames=keys, extrasaction="ignore", lineterminator="\n", delimiter=delimiter)
         w.writeheader()
         for r in self.plain:
             w.writerow(r)
@@ -420,27 +421,39 @@ def channel_table(con, cfg, peer_id: int, start: int, end: int) -> Table:
 def _emit(tables: list, fmt: str, cfg: dict, name: str) -> str:
     max_rows = int(cfg.get("tables", {}).get("max_rows", 150))
     if fmt == "csv":
-        return "\n".join(tb.to_csv() for tb in tables)
+        return "\n".join(tb.to_csv(_delim(cfg)) for tb in tables)
     if fmt == "json":
         return "[" + ",".join(tb.to_json() for tb in tables) + "]" if len(tables) > 1 else tables[0].to_json()
     parts = []
     for tb in tables:
-        if len(tb.rows) > max_rows:
-            path = _write_export(tb, name)
-            tb.footer.append(f"_{len(tb.rows) - max_rows} {md_escape(t(cfg, 'more_rows'))}_")
+        render = (lambda n=None: tb.to_md(n)) if fmt == "md" else (lambda n=None: tb.to_text(n))
+        # rows AND characters: Telegram's rich message holds 32 768 characters, long usernames can blow it
+        # with fewer than max_rows rows — then cut further (a little headroom for the agent's own words)
+        limit = min(max_rows, len(tb.rows))
+        body = render(limit if limit < len(tb.rows) else None)
+        while len(body) > MESSAGE_BUDGET and limit > 10:
+            limit = max(10, int(limit * 0.8))
+            body = render(limit)
+        if limit < len(tb.rows):
+            path = _write_export(tb, name, cfg)
+            tb.footer.append(f"_{len(tb.rows) - limit} {md_escape(t(cfg, 'more_rows'))}_")
             tb.footer.append(f"CSV: {path}")
-            body = tb.to_md(max_rows) if fmt == "md" else tb.to_text(max_rows)
-        else:
-            body = tb.to_md() if fmt == "md" else tb.to_text()
+            body = render(limit)
         parts.append(body)
     return "\n\n".join(parts)
 
 
-def _write_export(tb: Table, name: str) -> Path:
+def _delim(cfg: dict) -> str:
+    d = str(cfg.get("tables", {}).get("csv_delimiter", ",") or ",")
+    return d[0] if d.strip() else ","
+
+
+def _write_export(tb: Table, name: str, cfg: dict | None = None) -> Path:
     d = config.data_dir() / "exports"
     d.mkdir(parents=True, exist_ok=True)
     path = d / f"{name}-{datetime.now().strftime('%Y%m%d-%H%M%S')}.csv"
-    path.write_text(tb.to_csv(), encoding="utf-8")
+    # BOM: Excel opens UTF-8 CSV correctly only with it (Cyrillic, emoji)
+    path.write_text(tb.to_csv(_delim(cfg or {})), encoding="utf-8-sig")
     return path
 
 
@@ -500,4 +513,4 @@ def export_csv(cfg: dict, what: str, period: str = "all") -> Path:
                              "after_min": ((r["first_viewed_at"] or 0) - (r["posted_at"] or 0)) // 60,
                              "reaction": r["reaction"] or "", "who": who_plain(r),
                              "close_friend": int(bool(r["close_friend"]))})
-    return _write_export(tb, f"export-{what}")
+    return _write_export(tb, f"export-{what}", cfg)

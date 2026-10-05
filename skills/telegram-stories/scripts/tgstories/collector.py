@@ -32,6 +32,7 @@ class Collector:
         self.sleep = sleep
         self.poll = cfg.get("poll", {})
         self._last_reaction_refresh: dict = {}
+        self._last_full: dict = {}
         self._last_snapshot: dict = {}
         self._channels: dict = {}       # peer_id -> input entity
 
@@ -65,6 +66,24 @@ class Collector:
         items = getattr(ps, "stories", None) or []
         return self._ingest_stories(items, peer_id)
 
+    async def refresh_pinned(self, peer=SELF, peer_id: int | None = None) -> list[int]:
+        """All profile (pinned) stories, every page — new ones join the 30-minute profile poll."""
+        peer_id = peer_id or self.owner_id
+        items, offset_id = [], 0
+        for _ in range(50):
+            res = await self.api.pinned(peer, offset_id=offset_id, limit=100)
+            self._ingest_users(getattr(res, "users", None))
+            batch = getattr(res, "stories", None) or []
+            if not batch:
+                break
+            items.extend(batch)
+            offset_id = min(int(s.id) for s in batch)
+            if len(batch) < 100:
+                break
+            await self.sleep(self.poll.get("page_pause_s", 0.7))
+        self._ingest_stories(items, peer_id)
+        return [int(s.id) for s in items]
+
     def active_ids(self, peer_id: int | None = None) -> list[int]:
         peer_id = peer_id or self.owner_id
         now = db.now()
@@ -94,8 +113,8 @@ class Collector:
         now = db.now()
         for sid, sv in zip(ids, getattr(res, "views", None) or []):
             old = self.con.execute("SELECT views, reactions, forwards, viewers_listed, posted_at, list_available, "
-                                   "list_synced FROM stories WHERE peer_id=? AND story_id=?",
-                                   (peer_id, sid)).fetchone()
+                                   "list_synced, listed_views, listed_reactions FROM stories "
+                                   "WHERE peer_id=? AND story_id=?", (peer_id, sid)).fetchone()
             views = getattr(sv, "views_count", None)
             reactions = getattr(sv, "reactions_count", None)
             forwards = getattr(sv, "forwards_count", None)
@@ -113,20 +132,28 @@ class Collector:
             self._maybe_snapshot(peer_id, sid, old, views, reactions, forwards, now)
             if peer_id != self.owner_id:
                 continue  # channels: Telegram does not list viewers
-            # compare with the previous counter, not with the listed rows: hidden (incognito) or
-            # deleted viewers can keep the two apart forever and would cost a request every minute
-            views_grew = (old is None or old["list_synced"] is None
-                          or (views or 0) > (old["views"] or 0))
-            reactions_changed = old is not None and (reactions or 0) != (old["reactions"] or 0)
+            # Compare with the counters as they were when the list was last read (listed_*), not with the
+            # live counters: the 5-minute story refresh overwrites those too, and a growth it absorbed
+            # would never trigger a list read. Not with the listed rows either — incognito or deleted
+            # viewers keep those apart from the counter forever and would cost a request every minute.
+            never_listed = old is None or old["list_synced"] is None
+            views_grew = never_listed or (views or 0) > (old["listed_views"] or 0)
+            reactions_changed = not never_listed and (reactions or 0) != (old["listed_reactions"] or 0)
             did_full = False
             if force_lists or views_grew:
                 first_time = old is None or old["list_synced"] is None
                 found += await self.fetch_views(sid, peer=peer, peer_id=peer_id, full=first_time)
                 did_full = first_time
-            if (reactions_changed or force_lists) and not did_full:
+            if did_full:
+                self._last_full[sid] = now
+            # Full re-read when the reaction count moved (throttled; listed_reactions keeps the change pending
+            # until it is done) and anyway every `full_refresh_s`: ❤ replaced by 🔥 keeps the count the same.
+            due_full = now - self._last_full.get(sid, 0) >= int(self.poll.get("full_refresh_s", 1800))
+            if (reactions_changed or force_lists or due_full) and not did_full:
                 last = self._last_reaction_refresh.get(sid, 0)
-                if force_lists or now - last >= int(self.poll.get("reactions_refresh_s", 600)):
+                if force_lists or due_full or now - last >= int(self.poll.get("reactions_refresh_s", 600)):
                     self._last_reaction_refresh[sid] = now
+                    self._last_full[sid] = now
                     found += await self.fetch_views(sid, peer=peer, peer_id=peer_id, full=True)
         return found
 
@@ -147,12 +174,14 @@ class Collector:
         peer_id = peer_id or self.owner_id
         pause = self.poll.get("page_pause_s", 0.7) if pause is None else pause
         offset, new_rows, pages = "", 0, 0
-        total = views_count = None
+        total = views_count = reactions_count = None
         while True:
             res = await self.api.views_list(peer, story_id, offset=offset, limit=100)
             pages += 1
             total = getattr(res, "count", None)
-            views_count = getattr(res, "views_count", None)
+            if views_count is None:   # counters of the first page = the moment the read started
+                views_count = getattr(res, "views_count", None)
+                reactions_count = getattr(res, "reactions_count", None)
             self._ingest_users(getattr(res, "users", None))
             hit_known = False
             for item in getattr(res, "views", None) or []:
@@ -186,8 +215,12 @@ class Collector:
         if total is not None:
             available = 1 if (total or 0) > 0 or (views_count or 0) == 0 else 0
         self.con.execute("UPDATE stories SET list_available=COALESCE(?, list_available), list_synced=?, "
-                         "views=COALESCE(views, ?) WHERE peer_id=? AND story_id=?",
-                         (available, db.now(), views_count, peer_id, story_id))
+                         "views=COALESCE(views, ?), listed_views=COALESCE(?, listed_views) "
+                         "WHERE peer_id=? AND story_id=?",
+                         (available, db.now(), views_count, views_count, peer_id, story_id))
+        if full:   # only a full read has seen every viewer's current reaction
+            self.con.execute("UPDATE stories SET listed_reactions=COALESCE(?, listed_reactions) "
+                             "WHERE peer_id=? AND story_id=?", (reactions_count, peer_id, story_id))
         if new_rows:
             log.info("story %s: +%d viewer(s), %d listed", story_id, new_rows, listed)
         return new_rows
@@ -268,13 +301,16 @@ class Collector:
         pause = float(self.cfg.get("backfill", {}).get("pause_s", 2.0))
         items = await self.archive_items(peer)
         if peer_id == self.owner_id:
-            # active stories are in the archive too; pinned ones are not always — merge both
+            # active stories are in the archive too; pinned ones are not always — merge every page of both
             try:
-                res = await self.api.pinned(peer, offset_id=0, limit=100)
+                pinned_ids = set(await self.refresh_pinned(peer, peer_id))
                 known = {int(s.id) for s in items}
-                items.extend(s for s in getattr(res, "stories", None) or [] if int(s.id) not in known)
-            except Exception:  # noqa: BLE001
-                pass
+                missing = sorted(pinned_ids - known)
+                for i in range(0, len(missing), 100):
+                    res = await self.api.by_id(peer, missing[i:i + 100])
+                    items.extend(getattr(res, "stories", None) or [])
+            except Exception as exc:  # noqa: BLE001
+                log.warning("pinned stories not merged: %s", type(exc).__name__)
         self._ingest_stories(items, peer_id)
         items.sort(key=lambda s: int(s.id))
         done = skipped = viewers = 0

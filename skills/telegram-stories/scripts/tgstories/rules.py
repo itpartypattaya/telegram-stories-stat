@@ -111,10 +111,10 @@ def _resolve_users(con, refs) -> list[int]:
         if ref.lstrip("-").isdigit():
             ids.append(int(ref))
             continue
-        row = con.execute("SELECT user_id FROM people WHERE lower(username)=lower(?)", (ref.lstrip("@"),)).fetchone()
-        if not row:
+        uid = user_by_username(con, ref)
+        if uid is None:
             raise SystemExit(f"{ref}: not in the database yet (they must have viewed a story at least once)")
-        ids.append(int(row[0]))
+        ids.append(uid)
     return ids
 
 
@@ -167,7 +167,26 @@ def _audience_matches(con, spec, user_id, event) -> bool:
     return False
 
 
+def user_by_username(con, ref: str) -> int | None:
+    """@name → user id, matching the main username and every active collectible username."""
+    name = str(ref).strip().lstrip("@").lower()
+    if not name:
+        return None
+    row = con.execute("SELECT user_id FROM people WHERE lower(username)=?", (name,)).fetchone()
+    if row:
+        return int(row[0])
+    for uid, raw in con.execute("SELECT user_id, usernames FROM people WHERE usernames LIKE ?", (f'%"{name}"%',)):
+        try:
+            if name in {u.lower() for u in json.loads(raw or "[]")}:
+                return int(uid)
+        except ValueError:
+            continue
+    return None
+
+
 def _never(cfg, con) -> set:
+    """never_message → ids. An @name nobody in the database has yet resolves later, when that person shows
+    up — precheck runs it again for every message, so the ban is never skipped once they are known."""
     refs = cfg.get("autoresponder", {}).get("never_message") or []
     out = set()
     for r in refs:
@@ -175,9 +194,9 @@ def _never(cfg, con) -> set:
         if r.lstrip("-").isdigit():
             out.add(int(r))
         else:
-            row = con.execute("SELECT user_id FROM people WHERE lower(username)=lower(?)", (r.lstrip("@"),)).fetchone()
-            if row:
-                out.add(int(row[0]))
+            uid = user_by_username(con, r)
+            if uid is not None:
+                out.add(uid)
     return out
 
 
@@ -292,19 +311,20 @@ class Engine:
             variant = row["user_id"] % len(variants)
             self.con.execute(
                 "INSERT OR IGNORE INTO deliveries(rule_id,user_id,peer_id,story_id,status,reason,variant,created_at,"
-                "due_at) VALUES(?,?,?,?,?,?,?,?,?)",
+                "due_at,rule_digest) VALUES(?,?,?,?,?,?,?,?,?,?)",
                 (rule["id"], row["user_id"], row["peer_id"], row["story_id"], status, reason, variant, db.now(),
-                 due_time(self.cfg, spec) if status == "queued" else None))
+                 due_time(self.cfg, spec) if status == "queued" else None, rule["digest"]))
             made += 1
         return made
 
     def _bind_next(self, story_row: dict) -> None:
-        for rule in self.con.execute("SELECT * FROM rules WHERE status IN ('active','shadow') "
-                                     "AND bound_story_id IS NULL"):
+        """«The next story» means the next one after ACTIVATION: a shadow rule never binds, so a story
+        posted while the owner was still looking at the preview does not become the target."""
+        for rule in self.con.execute("SELECT * FROM rules WHERE status='active' AND bound_story_id IS NULL"):
             spec = json.loads(rule["spec"])
             if spec["stories"]["mode"] != "next":
                 continue
-            since = rule["activated_at"] or rule["updated_at"] or 0
+            since = rule["activated_at"] or 0
             if (story_row.get("posted_at") or 0) >= since and story_row.get("peer_id") == db.owner_id(self.con):
                 self.con.execute("UPDATE rules SET bound_story_id=? WHERE id=?", (story_row["story_id"], rule["id"]))
 
@@ -452,6 +472,15 @@ def simulate(con, cfg, rule) -> dict:
     return {"stories": ids, "would_send": match, "excluded": reasons}
 
 
+def _drop_queue(con, rule_id: int, reason: str, also_shadow: bool = False) -> int:
+    """Queued messages never outlive a change of the rule; shadow records are reset on a new spec."""
+    n = con.execute("UPDATE deliveries SET status='skipped', reason=? WHERE rule_id=? AND status='queued'",
+                    (reason, rule_id)).rowcount
+    if also_shadow:
+        con.execute("DELETE FROM deliveries WHERE rule_id=? AND status='shadow'", (rule_id,))
+    return n
+
+
 def cli(cfg, args) -> int:
     con = db.connect(create=False)
     a = args.action
@@ -489,8 +518,9 @@ def cli(cfg, args) -> int:
         return 0
     if a == "update":
         spec = normalize(load_spec(args), cfg)
-        con.execute("UPDATE rules SET name=?, spec=?, digest=?, status='shadow', updated_at=?, activated_at=NULL "
-                    "WHERE id=?", (spec["name"], db.dumps(spec), digest(spec), db.now(), args.id))
+        con.execute("UPDATE rules SET name=?, spec=?, digest=?, status='shadow', updated_at=?, activated_at=NULL, "
+                    "bound_story_id=NULL WHERE id=?", (spec["name"], db.dumps(spec), digest(spec), db.now(), args.id))
+        _drop_queue(con, args.id, "rule changed", also_shadow=True)
         rule = con.execute("SELECT * FROM rules WHERE id=?", (args.id,)).fetchone()
         print(_summary(con, cfg, rule))
         print("Updated — back in SHADOW mode; preview and confirm again to activate.")
@@ -513,18 +543,23 @@ def cli(cfg, args) -> int:
         is_dm = json.loads(rule["spec"])["action"]["type"] == "dm"
         if is_dm and not cfg.get("autoresponder", {}).get("enabled"):
             raise SystemExit("autoresponder.enabled is false in the config — the owner switches it on there first")
-        con.execute("UPDATE rules SET status='active', activated_at=?, paused_reason=NULL WHERE id=?",
-                    (db.now(), args.id))
+        # the digest is checked again inside the write: an update between preview and activation loses
+        cur = con.execute("UPDATE rules SET status='active', activated_at=?, paused_reason=NULL, bound_story_id=NULL "
+                          "WHERE id=? AND digest=? AND status IN ('shadow','paused')",
+                          (db.now(), args.id, args.confirm))
+        if cur.rowcount != 1:
+            raise SystemExit("the rule changed or is not in shadow/paused — run `rule preview` again")
+        _drop_queue(con, args.id, "rule re-activated", also_shadow=True)
         print(f"Rule {args.id} is ACTIVE. Stop everything at once: `stories.py stop`.")
         return 0
     if a == "shadow":
-        con.execute("UPDATE rules SET status='shadow', activated_at=NULL WHERE id=?", (args.id,))
+        con.execute("UPDATE rules SET status='shadow', activated_at=NULL, bound_story_id=NULL WHERE id=?", (args.id,))
+        _drop_queue(con, args.id, "rule back in shadow")
         print("shadow")
         return 0
     if a == "pause":
         con.execute("UPDATE rules SET status='paused', paused_reason='by owner' WHERE id=?", (args.id,))
-        con.execute("UPDATE deliveries SET status='skipped', reason='rule paused' WHERE rule_id=? AND status='queued'",
-                    (args.id,))
+        _drop_queue(con, args.id, "rule paused")
         print("paused")
         return 0
     if a == "delete":

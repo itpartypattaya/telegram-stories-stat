@@ -5,8 +5,8 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=@PYTHON@ @SCRIPTS@/daemon.py
-Environment=HERMES_HOME=@HERMES_HOME@
+ExecStart=@PYTHON@ @DAEMON@
+@ENVIRONMENT@
 Environment=PYTHONUNBUFFERED=1
 Restart=on-failure
 RestartSec=30

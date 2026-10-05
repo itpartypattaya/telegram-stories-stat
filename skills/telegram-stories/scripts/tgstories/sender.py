@@ -22,10 +22,16 @@ SKIP = {
 }
 
 
+FATAL = {"AuthKeyUnregisteredError", "SessionRevokedError", "AuthKeyDuplicatedError", "UserDeactivatedBanError",
+         "SessionExpiredError"}
+
+
 def classify(exc) -> tuple[str, str]:
-    """('stop'|'skip'|'retry'|'fail', reason)."""
+    """('fatal'|'stop'|'skip'|'retry'|'fail', reason)."""
     name = type(exc).__name__
     text = str(exc).upper()
+    if name in FATAL:
+        return "fatal", name   # the session itself is gone — not this recipient's problem
     if name in STOP_ALL:
         return "stop", "peer_flood"
     if "ALLOW_PAYMENT_REQUIRED" in text or "PAYMENT_REQUIRED" in text:
@@ -45,8 +51,8 @@ def caps_ok(con, cfg, spec, rule_id) -> str | None:
     caps = ar.get("caps", {})
     scope = spec["scope"]
     dm = "d.status='sent' AND d.reason IS NULL"   # notify/segment deliveries carry a reason
-    day = con.execute(f"""SELECT COUNT(*) FROM deliveries d JOIN rules r ON r.id=d.rule_id
-                          WHERE {dm} AND d.sent_at>? AND json_extract(r.spec,'$.scope')=?""",
+    # the scope recorded at sending time — editing a rule's scope must not reset what was already sent
+    day = con.execute(f"SELECT COUNT(*) FROM deliveries d WHERE {dm} AND d.sent_at>? AND d.scope=?",
                       (now - 86400, scope)).fetchone()[0]
     if day >= int(caps.get(scope, 10)):
         return f"cap_{scope}_day"
@@ -79,7 +85,8 @@ class Sender:
         self.notify = notify   # async callable(md)
 
     def halted(self) -> str | None:
-        if not self.cfg.get("autoresponder", {}).get("enabled"):
+        if not config.load_config().get("autoresponder", {}).get("enabled"):   # re-read: the owner may have just
+            # switched it off in the file, and the running service must not need a restart for that
             return "disabled"
         if str(db.get_state(self.con, "kill_switch", "0")) == "1":
             return "kill_switch"
@@ -103,22 +110,29 @@ class Sender:
         hours = float(self.cfg.get("autoresponder", {}).get("skip_if_owner_wrote_hours", 24))
         if hours <= 0:
             return False
-        msgs = await self.api.client.get_messages(peer, limit=1)
+        msgs = await self.api.client.get_messages(peer, limit=1, from_user="me")   # the owner's last message
         if not msgs:
             return False
-        m = msgs[0]
-        return bool(getattr(m, "out", False)) and m.date.timestamp() > db.now() - hours * 3600
+        return msgs[0].date.timestamp() > db.now() - hours * 3600
 
     async def run_once(self) -> int:
         """Process due deliveries. Owner notifications and segment updates always run; direct
         messages only while the autoresponder is enabled, not stopped and not in a flood pause."""
         sent = 0
+        try:
+            self.cfg = config.load_config()   # limits, quiet hours, never_message — always the current file
+        except SystemExit as exc:
+            log.warning("config not readable, nothing sent this round: %s", exc)
+            return 0
         due = self.con.execute("SELECT * FROM deliveries WHERE status='queued' AND due_at<=? ORDER BY due_at LIMIT 5",
                                (db.now(),)).fetchall()
         for d in due:
             rule = self.con.execute("SELECT * FROM rules WHERE id=?", (d["rule_id"],)).fetchone()
             if rule is None or rule["status"] != "active":
                 self._mark(d, "skipped", "rule_not_active")
+                continue
+            if d["rule_digest"] and d["rule_digest"] != rule["digest"]:
+                self._mark(d, "skipped", "rule changed")
                 continue
             spec = json.loads(rule["spec"])
             reason = rules.precheck(self.con, self.cfg, spec, d["user_id"])
@@ -128,8 +142,13 @@ class Sender:
             person = self.con.execute("SELECT * FROM people WHERE user_id=?", (d["user_id"],)).fetchone()
             action = spec["action"]
             if action["type"] == "notify":
-                await self._notify_owner(d, person, rule)
-                self._mark(d, "sent", "notified_owner")
+                if await self._notify_owner(d, person, rule):
+                    self._mark(d, "sent", "notified_owner")
+                elif db.now() - (d["created_at"] or 0) > 86400:
+                    self._mark(d, "failed", "notification not delivered")
+                else:
+                    self.con.execute("UPDATE deliveries SET due_at=? WHERE rule_id=? AND user_id=?",
+                                     (db.now() + 600, d["rule_id"], d["user_id"]))
                 continue
             if action["type"] == "segment":
                 self.con.execute("INSERT OR IGNORE INTO segment_members(segment,user_id,added_at) VALUES(?,?,?)",
@@ -156,6 +175,7 @@ class Sender:
                     self.con.execute("UPDATE deliveries SET due_at=? WHERE rule_id=? AND user_id=?",
                                      (db.now() + 3600, d["rule_id"], d["user_id"]))
                 continue
+            claimed = False
             try:
                 peer = await self.api.input_user(d["user_id"], person["access_hash"] if person else None)
                 if spec["scope"] == "dialog" and not await self._dialog_ok(d["user_id"], person["access_hash"]):
@@ -164,29 +184,55 @@ class Sender:
                 if await self._owner_wrote_recently(peer):
                     self._mark(d, "skipped", "owner_wrote_recently")
                     continue
+                # a fresh profile right before writing: contact status and the Stars price can change, and a
+                # stored "min" profile may not know them at all
+                fresh = await self.api.fresh_user(peer)
+                if fresh is not None:
+                    db.upsert_person(self.con, fresh)
+                    person = self.con.execute("SELECT * FROM people WHERE user_id=?", (d["user_id"],)).fetchone()
+                    reason = rules.precheck(self.con, self.cfg, spec, d["user_id"])
+                    if reason:
+                        self._mark(d, "skipped", reason)
+                        continue
                 variants = action["variants"]
                 text = render(variants[(d["variant"] or 0) % len(variants)], person)
+                # the network checks above took time: claim the message only now, after re-checking in
+                # one write transaction everything `stop` / `rule update` / `rule pause` could have changed
+                if not self._claim(d):
+                    continue
+                claimed = True
                 msg = await self.api.client.send_message(peer, text, link_preview=False)
-                self.con.execute("UPDATE deliveries SET status='sent', sent_at=?, msg_id=?, attempts=attempts+1 "
+                self.con.execute("UPDATE deliveries SET status='sent', sent_at=?, msg_id=? "
                                  "WHERE rule_id=? AND user_id=?",
                                  (db.now(), getattr(msg, "id", None), d["rule_id"], d["user_id"]))
                 sent += 1
                 log.info("auto-message sent: rule %s → user %s", d["rule_id"], d["user_id"])
             except Exception as exc:  # noqa: BLE001 — classified below
                 verdict, reason = classify(exc)
+                if verdict == "fatal":
+                    if claimed:
+                        self._mark(d, "failed", f"uncertain: {reason}")
+                    raise
                 if verdict == "stop":
                     db.set_state(self.con, "kill_switch", 1)
                     self._mark(d, "failed", reason)
                     await self._alert(f"⛔ Autoresponder stopped: Telegram reported {reason} (anti-spam limit on "
                                       "the account). Nothing more will be sent until `stories.py start`.")
                     break
+                if verdict == "retry" and claimed and type(exc).__name__ != "FloodWaitError":
+                    # a timeout or a dropped connection after the request left: it may have been delivered.
+                    # Never risk a second copy to a real person — record it and move on.
+                    self._mark(d, "failed", f"uncertain: {reason}")
+                    continue
                 if verdict == "retry":
                     wait = int(getattr(exc, "seconds", 60) or 60)
                     if wait > 300:
                         db.set_state(self.con, "breaker_until", db.now() + wait)
                         await self._alert(f"⏸ Autoresponder paused for {wait // 60} min: {reason}.")
-                    self.con.execute("UPDATE deliveries SET due_at=?, attempts=attempts+1 WHERE rule_id=? AND "
-                                     "user_id=?", (db.now() + max(wait, 60), d["rule_id"], d["user_id"]))
+                    # FloodWait: Telegram refused, nothing was sent — back to the queue (also out of `sending`)
+                    self.con.execute("UPDATE deliveries SET status='queued', due_at=? WHERE rule_id=? AND "
+                                     "user_id=? AND status IN ('queued','sending')",
+                                     (db.now() + max(wait, 60), d["rule_id"], d["user_id"]))
                     break
                 if verdict == "skip":
                     self._mark(d, "skipped", reason)
@@ -199,6 +245,32 @@ class Sender:
                     self._pause(rule["id"], f"3 failures in a row ({reason})")
         return sent
 
+    def _claim(self, d) -> bool:
+        """queued → sending, atomically, only if nothing stopped it meanwhile. A crash after this point
+        leaves the row in `sending`; recover_interrupted() turns that into `failed`, never a second send."""
+        self.con.execute("BEGIN IMMEDIATE")
+        try:
+            if self.halted():
+                self.con.execute("ROLLBACK")
+                return False
+            cur = self.con.execute(
+                "UPDATE deliveries SET status='sending', attempts=attempts+1, scope=(SELECT json_extract(r.spec,"
+                "'$.scope') FROM rules r WHERE r.id=deliveries.rule_id) WHERE rule_id=? AND user_id=? "
+                "AND status='queued' AND EXISTS (SELECT 1 FROM rules r WHERE r.id=deliveries.rule_id "
+                "AND r.status='active' AND (deliveries.rule_digest IS NULL OR r.digest=deliveries.rule_digest))",
+                (d["rule_id"], d["user_id"]))
+            self.con.execute("COMMIT")
+            return cur.rowcount == 1
+        except Exception:
+            self.con.execute("ROLLBACK")
+            raise
+
+    def recover_interrupted(self) -> int:
+        """Rows left in `sending` by a crash or a restart: the message may or may not have gone out.
+        Never resend — mark failed so the owner sees it in `rule show`."""
+        return self.con.execute("UPDATE deliveries SET status='failed', reason='interrupted while sending' "
+                                "WHERE status='sending'").rowcount
+
     def _mark(self, d, status, reason) -> None:
         self.con.execute("UPDATE deliveries SET status=?, reason=?, attempts=attempts+1 WHERE rule_id=? AND user_id=?",
                          (status, reason, d["rule_id"], d["user_id"]))
@@ -209,18 +281,19 @@ class Sender:
                          "status='queued'", (rule_id,))
         log.warning("rule %s paused: %s", rule_id, why)
 
-    async def _alert(self, text: str) -> None:
+    async def _alert(self, text: str) -> bool:
         if self.notify:
             try:
-                await self.notify(text)
+                return bool(await self.notify(text))
             except Exception:  # noqa: BLE001
                 log.exception("alert failed")
+        return False
 
-    async def _notify_owner(self, d, person, rule) -> None:
+    async def _notify_owner(self, d, person, rule) -> bool:
         from .tables import name_cell, nick_cell
         p = dict(person) if person else {"user_id": d["user_id"]}
         spec = json.loads(rule["spec"])
-        await self._alert(f"👀 {name_cell(p, self.cfg)} {nick_cell(p, self.cfg) if p.get('username') else ''} — "
+        return await self._alert(f"👀 {name_cell(p, self.cfg)} {nick_cell(p, self.cfg) if p.get('username') else ''} — "
                           f"story {d['story_id']} · rule «{spec['name']}»")
 
     def on_hidden(self, user_id: int) -> None:

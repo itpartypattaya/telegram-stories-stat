@@ -50,7 +50,8 @@ def to_plain(md: str) -> str:
         if re.fullmatch(r"\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)*\|?", s):
             continue
         if s.startswith("|") and s.endswith("|"):
-            cells = [c.strip() for c in s.strip("|").split("|")]
+            # split on unescaped pipes only: a name "A|B" is stored as "A\|B" and must stay one cell
+            cells = [c.strip() for c in re.split(r"(?<!\\)\|", s[1:-1])]
             s = " · ".join(c for c in cells if c)
         s = re.sub(r"\[([^\]]*)\]\(([^)]*)\)", lambda m: m.group(1) if m.group(1).startswith("@") else m.group(1), s)
         s = s.replace("**", "").replace("__", "")

@@ -111,7 +111,9 @@ def young(s) -> bool:
 def fair_baseline(con, peer_id: int, s, views: int, listed: int, n: int = 20) -> tuple:
     """(baseline, value to compare). A story younger than 48 h is compared with earlier stories at the
     same age (from their viewer timestamps); a finished one — with their final counters."""
-    if young(s) and s["list_available"] != 0:
+    if young(s):
+        if s["list_available"] != 1:
+            return None, views   # no list yet (or none at all): no honest same-age comparison — show nothing
         age_h = max(0.25, (db.now() - s["posted_at"]) / HOUR)
         return baseline_at(con, peer_id, s["posted_at"], age_h, n), listed
     prev = con.execute("SELECT views FROM stories WHERE peer_id=? AND deleted=0 AND posted_at<? "
@@ -120,9 +122,10 @@ def fair_baseline(con, peer_id: int, s, views: int, listed: int, n: int = 20) ->
 
 
 def story_at(con, peer_id: int, story_id: int, hours: float) -> int | None:
-    s = con.execute("SELECT posted_at, list_available FROM stories WHERE peer_id=? AND story_id=?",
+    s = con.execute("SELECT posted_at, list_available, list_synced FROM stories WHERE peer_id=? AND story_id=?",
                     (peer_id, story_id)).fetchone()
-    if s is None or not s["posted_at"] or s["list_available"] == 0:
+    # unknown is not zero: a list never read (list_synced NULL) or not given by Telegram yields None
+    if s is None or not s["posted_at"] or s["list_available"] != 1 or s["list_synced"] is None:
         return None
     return con.execute("SELECT COUNT(*) FROM views WHERE peer_id=? AND story_id=? AND first_viewed_at<=?",
                        (peer_id, story_id, s["posted_at"] + int(hours * HOUR))).fetchone()[0]
@@ -194,15 +197,17 @@ def people(con, peer_id: int, now: int | None = None) -> list[dict]:
     prev_ids = {r[0] for r in prev20}
     posted = {r[0]: r[1] for r in recent}
     by_user: dict = {}
-    for r in con.execute("SELECT v.user_id, v.story_id, v.first_viewed_at, v.reaction, s.posted_at "
+    for r in con.execute("SELECT v.user_id, v.story_id, v.first_viewed_at, v.reaction, s.posted_at, v.viewed_at "
                          "FROM views v JOIN stories s ON s.peer_id=v.peer_id AND s.story_id=v.story_id "
                          "WHERE v.peer_id=?", (peer_id,)):
         u = by_user.setdefault(r[0], {"stories": set(), "lags": [], "first": None, "last": None, "reactions": 0})
         u["stories"].add(r[1])
-        ts = r[2]
+        ts, latest = r[2], r[5] or r[2]
         if ts is not None:
+            # first contact = earliest first view; last activity = latest view (a re-view of an old
+            # profile story today counts as being active today)
             u["first"] = ts if u["first"] is None else min(u["first"], ts)
-            u["last"] = ts if u["last"] is None else max(u["last"], ts)
+            u["last"] = latest if u["last"] is None else max(u["last"], latest)
             if r[1] in last_ids and r[4]:
                 u["lags"].append(ts - r[4])
         if r[3]:

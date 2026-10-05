@@ -55,21 +55,31 @@ def user_row(u) -> dict | None:
         if getattr(item, "active", True) and getattr(item, "username", None):
             usernames.append(item.username)
     username = getattr(u, "username", None) or (usernames[0] if usernames else None)
-    paid = getattr(u, "send_paid_messages_stars", None)
+    is_min = bool(getattr(u, "min", False))
+
+    def flag(attr):
+        # a "min" object, or an older layer without the field, says nothing — None, not False
+        if is_min or not hasattr(u, attr):
+            return None
+        return int(bool(getattr(u, attr)))
+
+    paid = None
+    if not is_min and hasattr(u, "send_paid_messages_stars"):
+        paid = int(getattr(u, "send_paid_messages_stars") or 0)
     return {
         "user_id": int(u.id),
-        "access_hash": getattr(u, "access_hash", None) if not getattr(u, "min", False) else None,
+        "access_hash": getattr(u, "access_hash", None) if not is_min else None,
         "first_name": getattr(u, "first_name", None),
         "last_name": getattr(u, "last_name", None),
         "username": username,
         "usernames": json.dumps(usernames, ensure_ascii=False) if usernames else None,
-        "is_contact": int(bool(getattr(u, "contact", False))),
-        "mutual": int(bool(getattr(u, "mutual_contact", False))),
-        "close_friend": int(bool(getattr(u, "close_friend", False))),
-        "premium": int(bool(getattr(u, "premium", False))),
-        "bot": int(bool(getattr(u, "bot", False))),
-        "deleted": int(bool(getattr(u, "deleted", False))),
-        "paid_stars": int(paid) if paid else 0,
+        "is_contact": flag("contact"),
+        "mutual": flag("mutual_contact"),
+        "close_friend": flag("close_friend"),
+        "premium": flag("premium"),
+        "bot": flag("bot"),
+        "deleted": flag("deleted"),
+        "paid_stars": paid,
     }
 
 
@@ -314,6 +324,12 @@ class Api:
 
     async def entity(self, ref):
         return await self.client.get_entity(ref)
+
+    async def fresh_user(self, peer) -> dict | None:
+        """Full current profile (contact status, Stars price) — used right before an automatic message."""
+        from telethon.tl.functions.users import GetUsersRequest
+        res = await self.call(GetUsersRequest(id=[peer]))
+        return user_row(res[0]) if res else None
 
     async def input_user(self, user_id: int, access_hash: int | None):
         from telethon.tl.types import InputPeerUser
