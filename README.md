@@ -38,6 +38,11 @@ python3 ~/.hermes/skills/telegram-stories/scripts/stories.py login --qr      # o
 python3 ~/.hermes/skills/telegram-stories/scripts/install.py --backfill
 ```
 
+Installed as a plugin instead (`hermes plugins install itpartypattaya/hermes-telegram-stories`), the
+scripts live in `~/.hermes/plugins/hermes-telegram-stories/skills/telegram-stories/scripts/` — use that
+path above. The service unit points at whichever copy ran `install.py`. Any other agent with a shell:
+clone the repository anywhere, run the same scripts, and point the agent at `SKILL.md`.
+
 You need Telegram API credentials once (`api_id`, `api_hash` from <https://my.telegram.org> → API
 development tools); `login` asks for them and stores them in `~/.hermes/.env`. Hermes users who already
 have `TG_API_ID`/`TG_API_HASH` there are not asked. Then ask your agent: *"who watched my last story?"*,
