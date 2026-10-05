@@ -93,7 +93,10 @@ class Table:
         keys = list(self.plain[0].keys()) if self.plain else [c.key for c in self.cols]
         w = csv.DictWriter(buf, fieldnames=keys, extrasaction="ignore", lineterminator="\n", delimiter=delimiter)
         w.writeheader()
+        comma = delimiter == ";"   # spreadsheets that split on ";" read decimals with a comma (1,5 not 1.5)
         for r in self.plain:
+            if comma:
+                r = {k: (str(v).replace(".", ",") if isinstance(v, float) else v) for k, v in r.items()}
             w.writerow(r)
         return buf.getvalue()
 

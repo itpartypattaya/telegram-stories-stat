@@ -1,7 +1,7 @@
 ---
 name: telegram-stories
 description: "Telegram stories: who viewed, stats tables, auto-replies."
-version: 1.1.0
+version: 1.1.1
 author: "Anton Vaskov (itpartypattaya), https://t.me/passone"
 license: MIT
 compatibility: Hermes Agent >= 0.21 (written against 0.21.5); Python 3.10+; Telethon 1.40+ (tested 1.44)

@@ -72,6 +72,14 @@ class TablesTest(unittest.TestCase):
             self.assertNotIn("](", tb.to_text())
             json.loads(tb.to_json())
 
+    def test_csv_for_excel_with_semicolons(self):
+        tb = tables.Table(cols=[])
+        tb.plain = [{"name": "Ann", "share": 0.75, "n": 3}]
+        out = tb.to_csv(";")
+        self.assertIn("name;share;n", out)
+        self.assertIn("Ann;0,75;3", out)
+        self.assertIn("Ann,0.75,3", tb.to_csv())
+
     def test_caption_cut_never_splits_links_or_usernames(self):
         cut = tables.caption_cut
         self.assertEqual(cut("Read https://example.com/very/long/path today", 40), "Read 🔗 today")
