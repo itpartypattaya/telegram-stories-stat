@@ -18,8 +18,8 @@ EXPECTED_TABLES = {"meta", "state", "peers", "stories", "story_snapshots", "chan
 class InstallTest(unittest.TestCase):
     def run_install(self, *args):
         env = dict(os.environ)
-        return subprocess.run([sys.executable, str(SKILL / "scripts" / "install.py"), "--no-service", *args],
-                              capture_output=True, text=True, env=env, timeout=120)
+        return subprocess.run([sys.executable, str(SKILL / "scripts" / "install.py"), "--no-service", "--no-deps", "--no-login", *args],
+                              capture_output=True, text=True, env=env, timeout=120, stdin=subprocess.DEVNULL)
 
     def test_fresh_install_and_rerun(self):
         with TempHome() as home:

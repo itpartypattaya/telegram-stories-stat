@@ -6,10 +6,14 @@ can be terminated from the phone (Settings → Devices → "Hermes Stories")
 without touching any other session, and two long-running programs never share
 one auth key.
 
-The one-time code and the cloud password are typed by the owner in a terminal.
-A cloud password typed into a chat with an agent would stay in the agent's
-history and reach the model provider, so the agent-driven two-step mode refuses
-to take it.
+Default method: QR. The owner scans a code in the terminal with the phone
+(Settings → Devices → Link Desktop Device) — no login code has to arrive
+anywhere (on a real account Telegram reported "code sent to the app" and nothing
+came, twice). Fallback: phone number + code (`login --code`).
+
+The cloud password (two-step verification) is typed by the owner in the
+terminal, hidden. A password typed into a chat with an agent would stay in the
+agent's history and reach the model provider, so no mode takes it from a chat.
 """
 from __future__ import annotations
 
@@ -148,6 +152,23 @@ async def interactive(cfg: dict, phone: str | None = None) -> int:
         return await _finish(client, cfg)
     finally:
         await client.disconnect()
+
+
+def qr_available() -> bool:
+    try:
+        import qrcode  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
+async def default(cfg: dict) -> int:
+    """`stories.py login`: QR when it can be drawn here, otherwise phone + code."""
+    if qr_available():
+        return await qr(cfg)
+    print("The `qrcode` package is missing, so no QR can be drawn here (install.py installs it). "
+          "Falling back to phone + login code.")
+    return await interactive(cfg)
 
 
 def _print_qr(url: str) -> None:

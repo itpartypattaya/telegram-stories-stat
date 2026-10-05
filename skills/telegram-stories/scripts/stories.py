@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """telegram-stories CLI.
 
-  stories.py login [--phone +…] [--qr]        separate Telegram session (run in a terminal)
+  stories.py login [--with-code|--phone +…]   separate Telegram session by QR (run in a terminal)
   stories.py login start --phone +… | finish --code …   two-step mode for agents (no cloud password)
   stories.py doctor                           health check
   stories.py sync                             one collection pass (the service does this every minute)
@@ -63,9 +63,9 @@ def cmd_login(args, cfg) -> int:
         if not args.code:
             raise SystemExit("login finish needs --code")
         return asyncio.run(login.finish(cfg, args.code))
-    if args.qr:
-        return asyncio.run(login.qr(cfg))
-    return asyncio.run(login.interactive(cfg, args.phone))
+    if args.with_code or args.phone:
+        return asyncio.run(login.interactive(cfg, args.phone))
+    return asyncio.run(login.default(cfg))
 
 
 def cmd_doctor(args, cfg) -> int:
@@ -154,9 +154,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     lg = sub.add_parser("login", help="log the service in with its own Telegram session")
     lg.add_argument("step", nargs="?", choices=["start", "finish"], help="two-step mode for agents")
-    lg.add_argument("--phone")
-    lg.add_argument("--code")
-    lg.add_argument("--qr", action="store_true")
+    lg.add_argument("--phone", help="log in with phone + code instead of QR")
+    lg.add_argument("--with-code", action="store_true", help="phone + code instead of QR")
+    lg.add_argument("--code", help="the code, for `login finish`")
+    lg.add_argument("--qr", action="store_true", help="QR (the default; kept for old instructions)")
     lg.set_defaults(func=cmd_login)
 
     dr = sub.add_parser("doctor", help="health check")
@@ -224,6 +225,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv=None) -> int:
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(errors="replace")  # emoji in tables must not crash a legacy console
+        except (AttributeError, ValueError):
+            pass
     args = build_parser().parse_args(argv)
     if args.cmd in TELEGRAM_COMMANDS or (args.cmd == "doctor" and not args.offline) \
             or (args.cmd == "rule" and args.action in ("activate",)):

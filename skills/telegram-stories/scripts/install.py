@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """Install, check or remove telegram-stories.
 
-  install.py                    data folder + database + config + service (if a session exists)
-  install.py --install-deps     also pip-install Telethon into the service interpreter
+  install.py                    everything in one go: Telethon + qrcode if missing, data folder, database,
+                                config, then — in a terminal — the QR login, the service, the history import
   install.py --python PATH      interpreter for the service (default: this one)
-  install.py --backfill         import story history right after installing
+  install.py --backfill         import story history without asking
+  install.py --no-deps          do not pip-install anything
+  install.py --no-login         do not start the QR login even in a terminal
   install.py --no-service       only files and database (no systemd unit)
   install.py --check            health check (same as `stories.py doctor`)
   install.py --uninstall [--purge]   stop and remove the service; --purge also deletes the collected data
@@ -45,6 +47,17 @@ def telethon_version(python: str) -> str | None:
         return out.stdout.strip() if out.returncode == 0 else None
     except Exception:  # noqa: BLE001
         return None
+
+
+DEP_TELETHON = "telethon>=1.36,<2"
+DEP_QRCODE = "qrcode>=7,<9"
+
+
+def module_present(python: str, module: str) -> bool:
+    try:
+        return subprocess.run([python, "-c", f"import {module}"], capture_output=True, timeout=60).returncode == 0
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def detect_timezone() -> str:
@@ -145,11 +158,18 @@ def main() -> int:
     p.add_argument("--check", action="store_true")
     p.add_argument("--uninstall", action="store_true")
     p.add_argument("--purge", action="store_true")
-    p.add_argument("--install-deps", action="store_true")
+    p.add_argument("--install-deps", action="store_true", help="kept for old instructions; deps are the default")
+    p.add_argument("--no-deps", action="store_true")
+    p.add_argument("--no-login", action="store_true")
     p.add_argument("--python", default=sys.executable)
     p.add_argument("--no-service", action="store_true")
     p.add_argument("--backfill", action="store_true")
     args = p.parse_args()
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(errors="replace")  # a legacy console code page must not crash on "→"
+        except (AttributeError, ValueError):
+            pass
 
     if args.uninstall:
         return uninstall(args.purge)
@@ -162,11 +182,17 @@ def main() -> int:
         return 1
     python = str(Path(args.python))
     ver = telethon_version(python)
-    if not ver and args.install_deps:
-        subprocess.run([python, "-m", "pip", "install", "telethon>=1.36,<2", "qrcode>=7"], check=False)
+    has_qr = module_present(python, "qrcode")
+    missing = ([DEP_TELETHON] if not ver else []) + ([DEP_QRCODE] if not has_qr else [])
+    if missing and not args.no_deps:
+        print("installing " + ", ".join(missing) + " …")
+        subprocess.run([python, "-m", "pip", "install", "--quiet", *missing], check=False)
         ver = telethon_version(python)
+        has_qr = module_present(python, "qrcode")
     say(bool(ver) or None, f"telethon {ver} for {python}" if ver else
-        f"telethon missing for {python} — rerun with --install-deps (or install it yourself)")
+        f"telethon missing for {python} — run without --no-deps (or install {DEP_TELETHON} yourself)")
+    say(has_qr or None, "qrcode for the QR login" if has_qr else
+        "qrcode missing — login falls back to phone + code")
 
     d = config.data_dir()
     d.mkdir(parents=True, exist_ok=True)
@@ -182,11 +208,19 @@ def main() -> int:
     say(True, f"database ready: {config.db_path()} (schema v{con.execute('PRAGMA user_version').fetchone()[0]})")
     ensure_config()
 
-    session = config.secret(config.load_config().get("session_env") or "STORIES_SESSION_STRING")
+    session_env = config.load_config().get("session_env") or "STORIES_SESSION_STRING"
+    session = config.secret(session_env)
+    just_logged_in = False
+    if not session and ver and sys.stdin.isatty() and not args.no_login:
+        print("\nNow log the service in with its own Telegram session (\"Hermes Stories\").")
+        print("A QR code follows: on your phone open Telegram → Settings → Devices → Link Desktop Device.\n")
+        subprocess.run([python, str(SCRIPTS / "stories.py"), "login"], check=False)
+        session = config.secret(session_env)
+        just_logged_in = bool(session)
     if not session:
-        say(None, "no Telegram session yet. Next, in a terminal:\n"
+        say(None, "no Telegram session yet. In a terminal run:\n"
                   f"       {python} {SCRIPTS / 'stories.py'} login\n"
-                  "     then run install.py again to start the service.")
+                  "     (it shows a QR to scan), then run install.py again to start the service.")
     if not args.no_service:
         install_unit(python, start=bool(session and ver))
 
@@ -196,7 +230,11 @@ def main() -> int:
         say(None, "Hermes sends tables as bullet lists until you enable native tables: "
                   "platforms.telegram.extra.rich_messages: true in config.yaml")
 
-    if args.backfill:
+    want_backfill = args.backfill
+    if just_logged_in and not want_backfill and sys.stdin.isatty():
+        answer = input("Import all your past stories now (about 4 s per story, resumable)? [Y/n] ").strip().lower()
+        want_backfill = answer in ("", "y", "yes", "д", "да")
+    if want_backfill:
         if not session:
             say(False, "backfill needs the session — log in first")
         else:

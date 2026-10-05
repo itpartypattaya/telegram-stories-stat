@@ -1,4 +1,4 @@
-# telegram-stories
+# telegram-stories-stat
 
 **Who watched your Telegram stories, when, and what to do about it** — a skill for personal AI agents
 ([Hermes Agent](https://github.com/NousResearch/hermes-agent) first, any agent with a shell works).
@@ -29,22 +29,25 @@ Story 221 · 05.10.2026 14:01 · 📷 photo
 
 ```bash
 # 1. install the skill (Hermes)
-hermes skills install itpartypattaya/hermes-telegram-stories/skills/telegram-stories
-# 2. create the database, config and service files; install Telethon if missing
-python3 ~/.hermes/skills/telegram-stories/scripts/install.py --install-deps
-# 3. log the service in with its OWN session — in a terminal, you type the code/password yourself
-python3 ~/.hermes/skills/telegram-stories/scripts/stories.py login --qr      # or: login (phone + code)
-# 4. start the service and import your history
-python3 ~/.hermes/skills/telegram-stories/scripts/install.py --backfill
+hermes skills install itpartypattaya/telegram-stories-stat/skills/telegram-stories
+# 2. one command, in a terminal: dependencies, database, config, QR login, service, history import
+python3 ~/.hermes/skills/telegram-stories/scripts/install.py
 ```
 
-Installed as a plugin instead (`hermes plugins install itpartypattaya/hermes-telegram-stories`), the
-scripts live in `~/.hermes/plugins/hermes-telegram-stories/skills/telegram-stories/scripts/` — use that
+Step 2 installs Telethon and `qrcode` if they are missing, creates the database and the config, then shows
+a **QR code right in the terminal**: on your phone open Telegram → Settings → Devices → *Link Desktop Device*
+and scan it. If two-step verification is on, type the cloud password when asked (hidden). The service
+starts, and the installer offers to import all your past stories. No login code has to arrive anywhere —
+on a real account Telegram twice said "code sent to the app" and nothing came, which is why QR is the
+default. Phone + code is still there: `stories.py login --with-code`.
+
+Installed as a plugin instead (`hermes plugins install itpartypattaya/telegram-stories-stat`), the
+scripts live in `~/.hermes/plugins/telegram-stories-stat/skills/telegram-stories/scripts/` — use that
 path above. The service unit points at whichever copy ran `install.py`. Any other agent with a shell:
 clone the repository anywhere, run the same scripts, and point the agent at `SKILL.md`.
 
 You need Telegram API credentials once (`api_id`, `api_hash` from <https://my.telegram.org> → API
-development tools); `login` asks for them and stores them in `~/.hermes/.env`. Hermes users who already
+development tools); the login asks for them and stores them in `~/.hermes/.env`. Hermes users who already
 have `TG_API_ID`/`TG_API_HASH` there are not asked. Then ask your agent: *"who watched my last story?"*,
 *"summary of my stories for September"*, *"who is my core audience?"*.
 
@@ -199,8 +202,8 @@ contacts-only default, the kill switch and the separate session you can terminat
   notifications when a bot token is configured. Nothing else.
 - **Files written:** the paths in the table above; a systemd user unit
   `~/.config/systemd/user/telegram-stories.service`; the env file (one or three keys).
-- **Processes:** one long-running service; the CLI on demand; `pip install telethon` only with
-  `--install-deps`.
+- **Processes:** one long-running service; the CLI on demand; `install.py` runs
+  `pip install "telethon>=1.36,<2" "qrcode>=7,<9"` only when they are missing (`--no-deps` to skip).
 - **Capabilities:** reads your stories, their viewers, reactions and replies; sends private messages
   only through active rules within the limits above; never posts, never joins chats, never pays.
 - **LLM:** none.

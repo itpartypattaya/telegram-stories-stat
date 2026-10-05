@@ -29,9 +29,11 @@ It does not post stories, does not read anyone's chats and cannot show who viewe
 
 ## Prerequisites
 
-- Installed once by the owner: `python3 "${HERMES_SKILL_DIR}/scripts/install.py" --install-deps`, then
-  `stories.py login` **in a terminal** (separate Telegram session "Hermes Stories"), then `install.py`
-  again to start the service. Check with `install.py --check`.
+- Installed once by the owner **in a terminal**: `python3 "${HERMES_SKILL_DIR}/scripts/install.py"` —
+  installs Telethon and qrcode, creates the database and config, shows a QR code to scan with the phone
+  (separate Telegram session "Hermes Stories"), starts the service and offers the history import.
+  Check with `install.py --check`. If you are asked to set it up, give the owner that command; do not run
+  the login yourself.
 - Without Telegram Premium, viewer lists vanish 24 h after a story expires — only live collection works.
 - Tables render as real tables in Telegram when Hermes has
   `platforms.telegram.extra.rich_messages: true`; otherwise they arrive as bullet groups.
@@ -85,7 +87,8 @@ Add `--format csv|json|text` to any table when Markdown is not wanted.
 6. "Stop", "turn it off", "enough" → `stories.py stop` immediately, then confirm.
 
 **Login.** Never ask for the login code or the cloud password in chat. The owner runs
-`stories.py login` (or `login --qr`) in a terminal; you only tell them the command.
+`stories.py login` in a terminal (QR by default, `--with-code` for phone + code); you only tell them the
+command.
 
 ## Pitfalls
 
