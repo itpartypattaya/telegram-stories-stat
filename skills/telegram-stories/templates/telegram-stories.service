@@ -1,0 +1,18 @@
+[Unit]
+Description=telegram-stories collector (Telegram story views; no LLM)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=@PYTHON@ @SCRIPTS@/daemon.py
+Environment=HERMES_HOME=@HERMES_HOME@
+Environment=PYTHONUNBUFFERED=1
+Restart=on-failure
+RestartSec=30
+# exit code 3 = the Telegram session was terminated; restarting would not help
+RestartPreventExitStatus=3
+Nice=5
+
+[Install]
+WantedBy=default.target

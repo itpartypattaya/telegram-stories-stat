@@ -1,0 +1,11 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "hermes-telegram-stories",
+  "version": "1.0.0",
+  "description": "Telegram stories: who viewed and when, statistics tables, opt-in auto-replies by rules.",
+  "author": {"name": "Anton Vaskov", "url": "https://t.me/passone"},
+  "homepage": "https://github.com/itpartypattaya/hermes-telegram-stories",
+  "repository": "https://github.com/itpartypattaya/hermes-telegram-stories",
+  "license": "MIT",
+  "keywords": ["telegram", "stories", "analytics", "telethon", "autoresponder", "hermes"]
+}

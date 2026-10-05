@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+*.db
+*.db-wal
+*.db-shm
+.env
+*.session
+exports/
+thumbs/
+# local working notes, not part of the package
+HANDOFF.md
+CLAUDE.md
+plans/
