@@ -87,8 +87,8 @@ Notifications → your agent's Telegram bot (native tables) or your Saved Messag
 | | |
 |---|---|
 | Long-running processes | **1** (`telegram-stories.service`, a systemd user unit) |
-| Memory | **~65 MB** resident (measured: Python 3.11 + Telethon 1.44 after connecting) |
-| CPU | ~3 ms per Telegram request → well under 0.1% of one core on average |
+| Memory | **~65–70 MB** resident (measured on a live service: 67.8 MB RSS, 53 MB in its cgroup; Python 3.11 + Telethon 1.44) |
+| CPU | about 0.5 s to start, then ~3 ms per Telegram request → around 0.1% of one core |
 | Network | 1 TCP connection to Telegram; a few KB per minute |
 | Disk | database ~5 MB per 30,000 viewer rows; thumbnails ~20 KB per story (optional) |
 | Language model calls | **0** — the service and every script are deterministic |
