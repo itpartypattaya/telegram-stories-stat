@@ -64,6 +64,7 @@ STRINGS = {
         "d_nojs": "Viewer lists open when JavaScript is on.",
         "d_footer": "Made by telegram-stories {v}. The file makes no network requests: all data is inside it.",
         "d_no_stories": "No stories in this period.", "d_stories_n": "stories",
+        "d_open_story": "Open the story", "d_open_note": "Opens in Telegram while the story is available",
     },
     "ru": {
         "n": "№", "time": "Время", "after": "Через", "name": "Имя", "nick": "Ник", "reaction": "Реакция",
@@ -130,6 +131,7 @@ STRINGS = {
         "d_nojs": "Списки зрителей открываются, когда включён JavaScript.",
         "d_footer": "Собрано telegram-stories {v}. Файл не делает сетевых запросов: все данные внутри него.",
         "d_no_stories": "За этот период сторис нет.", "d_stories_n": "сторис",
+        "d_open_story": "Перейти к сторис", "d_open_note": "Откроется в Telegram, пока сторис доступна",
     },
 }
 

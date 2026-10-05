@@ -19,7 +19,7 @@
 | Field | Values |
 |---|---|
 | `stories.mode` | `ids` (+ `"ids": [221, 222]`) · `next` (the next story posted after activation) · `tag` (+ `"tag": "#launch"`, matched in the caption) · `all` |
-| `audience.mode` | `all` · `users` (+ `"users": ["@ann", 12345]`) · `segment` (+ `"segment": "vip"`) · `reacted` (+ optional `"reactions": ["❤"]`) · `new` (first-ever viewers) · `status` (+ `"status": ["core"]`) |
+| `audience.mode` | `all` · `users` (+ `"users": ["@ann", 12345]`) · `segment` (+ `"segment": "vip"`; a chat segment = members of a group) · `reacted` (+ optional `"reactions": ["❤"]`) · `new` (first-ever viewers) · `status` (+ `"status": ["core"]`) |
 | `scope` | `contacts` (default — in the owner's contacts) · `dialog` (the person has written to the owner before) · `all` (strangers too) |
 | `trigger` | `view` · `reaction` · `reply` (a private reply to the story) |
 | `action.type` | `dm` (+ `text` or `variants: [...]` for an A/B split by user id) · `notify` (tell the owner, write to nobody) · `segment` (+ `segment`: add the person to a static segment) |
@@ -44,6 +44,7 @@ by username the first time they view (the preview says so). A numeric Telegram i
 | Thank people who reacted | `trigger: reaction`, `audience: {mode: all}` (or `reacted` + `reactions: ["❤"]`), `scope: contacts` |
 | Warm-up: mark who watched story A, write to them after story B | rule 1: story A, `action: {type: segment, segment: "warm"}` (writes to nobody); rule 2: story B, `audience: {mode: segment, segment: "warm"}`, `action: dm` |
 | Greet first-time viewers yourself | `audience: {mode: new}`, `action: notify` — the owner decides whom to write to |
+| Only the members of a group | `segment create vibe --kind chat --source @group` (a t.me link or the numeric id -100… also work; the account must be in the group), then `audience: {mode: segment, segment: "vibe"}`. The service reads the member list every 15 min (`poll.chat_segments_s`); right before each message it asks Telegram whether this person is a member **now** — left, or no clear answer → skipped (`not_in_chat` / `chat_unverified`). Combine with `scope: dialog` for "members who have written to me" |
 
 Timing: active stories are checked every minute and new stories every 5 minutes; then the rule's delay
 (default 2–6 min, at least 30 s) and quiet hours apply — to owner notifications as well. Profile (pinned)

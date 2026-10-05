@@ -104,10 +104,10 @@ def build(home: Path, locale: str, seed: int = 7, period: str | None = None) -> 
         thumb(thumbs / name, seed * 1000 + sid)
         con.execute("INSERT INTO stories(peer_id,story_id,posted_at,expire_at,pinned,media_kind,duration,caption,"
                     "views,reactions,forwards,viewers_listed,list_available,deleted,first_seen,last_synced,"
-                    "list_synced,thumb) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,1,0,?,?,?,?)",
+                    "list_synced,thumb,link) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,1,0,?,?,?,?,?)",
                     (owner, sid, posted, posted + 86400, int(rnd.random() < 0.4), kind,
                      12.0 if kind == "video" else None, cap or None, views, reactions, rnd.randint(0, 6),
-                     len(viewers), posted, now, now, name))
+                     len(viewers), posted, now, now, name, db.story_link("alexdemo", sid)))
         for uid, at in rnd.sample(viewers, min(len(viewers), rnd.randint(0, 3))):
             con.execute("INSERT OR IGNORE INTO story_replies(peer_id,story_id,user_id,msg_id,at,length) "
                         "VALUES(?,?,?,?,?,?)", (owner, sid, uid, sid * 100 + uid % 100, at + 60, 12))

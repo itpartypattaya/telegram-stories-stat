@@ -1,6 +1,6 @@
 # telegram-stories-stat
 
-**English** · [Русский](README.ru.md)
+**English** · [Русский](README.ru.md) · [Changelog](CHANGELOG.md)
 
 ![telegram-stories-stat](docs/cover.jpg)
 
@@ -125,7 +125,8 @@ The page shows:
 - the audience groups and a table of all viewers, with a search;
 - the channel stories and the autoresponder rules.
 
-Select a story to see its viewers. Select a person to see the stories that this person viewed.
+Select a story to see its viewers. Select a person to see the stories that this person viewed. The button
+**Open the story** opens the story in Telegram while the story is available.
 
 ![The dashboard on made-up data](docs/dashboard.png)
 
@@ -186,7 +187,7 @@ A rule has four parts:
 | Part | Options |
 |---|---|
 | **Stories** | specific stories · the next story · stories with a marker in the caption (for example, `#guide`) · all stories |
-| **Viewers** | all · specific people (@username) · a segment · viewers with a reaction · new viewers · an audience group (for example, core) |
+| **Viewers** | all · specific people (@username) · a segment · the members of a group · viewers with a reaction · new viewers · an audience group (for example, core) |
 | **Event** | a view · a reaction · a reply to the story |
 | **Action** | a private message to the viewer · a notification to you · add the viewer to a segment |
 
@@ -272,6 +273,11 @@ You want to know when each person opens the story. Each person gets a confirmati
 - **Warm-up.** The first rule adds the viewers of a teaser story to the segment "warm". After the main story,
   the second rule writes only to this segment.
 - **Two text variants.** The service divides the recipients equally between two texts.
+- **Only the members of a group.** Make a group segment: `stories.py segment create vibe --kind chat --source
+  @group` (or the group link, or its numeric ID). The rule writes only to the members of the group. The service
+  reads the member list again each 15 minutes. Right before each message, the service asks Telegram if this
+  person is in the group now. If the person left the group, or Telegram gives no clear answer, the message does
+  not go.
 
 ### Turn on a rule
 
@@ -297,6 +303,7 @@ Rules cannot turn off this protection. You can change the numbers in the config.
 - The service does not write to bots, deleted accounts and people who hid your stories or blocked you.
 - The service does not write to people with paid messages (Stars). The service never pays.
 - The service does not write to people in the `never_message` list.
+- For a group segment, the service checks the membership in the group right before each message.
 - One person gets one message for each rule. One person gets not more than one automatic message in 7 days.
 - Limits per day: 40 messages to contacts, 40 to people who wrote to you, 10 to all other people. Limit per
   hour: 15 messages.
@@ -394,7 +401,7 @@ How to see the data:
   [--period 90d]` saves a CSV file in the folder `exports/`. If your spreadsheet uses a decimal comma, set
   `tables.csv_delimiter: ";"` in the config.
 - **Open the database.** Use a SQLite program, for example DB Browser for SQLite or Datasette. Open the
-  database read-only. The main tables: `stories`, `views`, `people` (viewers), `people_history` (changes of
+  database read-only. The main tables: `stories` (with `link`, the direct link to each story), `views`, `people` (viewers), `people_history` (changes of
   names and usernames), `story_replies` (replies), `rules`, `deliveries` (sent messages).
 
 This is personal data of your viewers. It stays only on your computer. The service sends data only to Telegram
@@ -434,6 +441,7 @@ The agent runs these commands. You can also run them in a terminal.
 | `stories.py export views --period 90d` | an export to CSV |
 | `stories.py dashboard [--period 1y]` | the HTML dashboard: one file; `--no-thumbs` makes it smaller |
 | `stories.py rule …` | autoresponder rules |
+| `stories.py segment create vibe --kind chat --source @group` | a segment of the members of a group (`segment refresh` reads it again now) |
 | `stories.py stop` / `start` | stop / continue all automatic messages |
 | `stories.py doctor` | a health check |
 

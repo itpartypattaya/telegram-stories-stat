@@ -6,7 +6,7 @@
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; base-uri 'none'; form-action 'none'">
 <meta name="referrer" content="no-referrer">
 <meta name="robots" content="noindex, nofollow">
-<title>{{TITLE}}</title>
+<title>Stories dashboard — template</title>
 <style>
 :root{color-scheme:light dark;
 --bg:#f4f6f8;--card:#fff;--ink:#131920;--muted:#5d6977;--faint:#8a94a0;--line:#e2e6eb;--soft:#edf0f4;
@@ -36,7 +36,7 @@ h1{font-size:26px;line-height:1.2;margin:0 0 4px;letter-spacing:-.01em}
 .tabs label{padding:7px 16px;border-radius:9px;font-size:14px;font-weight:500;color:var(--muted);cursor:pointer;user-select:none}
 .tab-input:focus-visible ~ .tabs{outline:2px solid var(--accent);outline-offset:2px}
 .panel{display:none}
-{{TAB_CSS}}
+/*{{TAB_CSS}}*/
 .kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-bottom:16px}
 .kpi{background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:13px 16px;box-shadow:var(--shadow)}
 .kpi .l{font-size:13px;color:var(--muted)}
@@ -82,10 +82,13 @@ svg [data-story]:hover,svg .mo:hover{opacity:.75}
 .sc:hover{border-color:rgb(var(--accent-rgb) / .5)}
 .th{background:var(--soft) center/cover no-repeat;display:flex;align-items:center;justify-content:center;font-size:26px}
 .sc .th{aspect-ratio:3/4}
-.sc figcaption{padding:9px 10px 11px;font-size:13px}
+.sc figcaption{padding:9px 10px 11px;font-size:13px;flex:1;display:flex;flex-direction:column}
+.sc .sp{flex:1;min-height:8px}.sc .go{margin-top:0;align-self:flex-start}
 .sc .row{display:flex;justify-content:space-between;align-items:center;gap:6px}
 .sc .dt2{color:var(--faint);font-size:12px}
 .sc .cp{color:var(--muted);font-size:12px;margin:4px 0 0;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.go{display:inline-block;margin-top:8px;font-size:12px;font-weight:600;padding:5px 10px;border-radius:8px;background:rgb(var(--accent-rgb) / .12);color:var(--accent);white-space:nowrap}
+.go:hover{background:rgb(var(--accent-rgb) / .2);text-decoration:none}
 .badge{display:inline-block;font-size:12px;font-weight:600;padding:1px 7px;border-radius:999px;white-space:nowrap;background:var(--soft);color:var(--muted)}
 .badge.up{background:rgb(22 147 90 / .13);color:var(--up)}.badge.down{background:rgb(211 63 63 / .12);color:var(--down)}
 .tw{overflow-x:auto}
@@ -137,12 +140,16 @@ dialog::backdrop{background:rgb(10 14 20 / .55)}
 .new{font-size:11px;font-weight:600;color:var(--up);margin-left:6px}
 @media (max-width:720px){.kpis{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media (max-width:560px){h1{font-size:22px}.kpi .v{font-size:22px}.card{padding:15px 14px}.tabs label{padding:7px 12px}}
-{{THUMBS}}
+/*{{THUMBS}}*/
 </style>
 </head>
 <body>
 <div class="wrap">
-{{BODY}}
+<!--{{BODY}}-->
+<h1>Stories dashboard — template</h1>
+<p class="private">This is the page template, without data. Run <code>stories.py dashboard</code> (or ask the agent to make the dashboard): it writes the filled page to <code>&lt;data dir&gt;/dashboard/dashboard.html</code>.</p>
+<p class="private">Это шаблон страницы, без данных. Готовый дашборд собирает команда <code>stories.py dashboard</code> (или попросите агента): файл <code>&lt;папка данных&gt;/dashboard/dashboard.html</code>.</p>
+<!--/BODY-->
 </div>
 <dialog id="dlg" aria-labelledby="dlg-title"><div class="dh" id="dlg-head"></div><div class="db" id="dlg-body"></div></dialog>
 <script type="application/json" id="dash-data">{{DATA}}</script>
@@ -151,7 +158,9 @@ dialog::backdrop{background:rgb(10 14 20 / .55)}
   "use strict";
   var root = document.documentElement;
   root.classList.add("js");
-  var D = JSON.parse(document.getElementById("dash-data").textContent), T = D.t;
+  var raw = document.getElementById("dash-data").textContent;
+  if (raw.charAt(0) === "{" && raw.charAt(1) === "{") return;   // the bare template: nothing to run
+  var D = JSON.parse(raw), T = D.t;
   var each = function (list, fn) { Array.prototype.forEach.call(list, fn); };
 
   // ── time, in the timezone of the config ──
@@ -305,6 +314,11 @@ dialog::backdrop{background:rgb(10 14 20 / .55)}
     if (s.ix) stats += " · " + T.index + " " + s.ix;
     var meta = [day(s.t) + " " + when(s.t, s.t), stats];
     if (s.l) meta.push(T.listed.replace("{n}", num(s.l)).replace("{v}", num(s.v)));
+    if (/^https:\/\/t\.me\/[A-Za-z0-9_]{3,64}\/s\/\d+$/.test(s.u || "")) {
+      var go = el("a", "go", T.open_story + " ↗");
+      go.href = s.u; go.target = "_blank"; go.rel = "noopener noreferrer"; go.title = T.open_note;
+      meta.push(go);
+    }
     header(thumb(s.th, s.k), T.story + " " + sid, meta, s.c);
     var rows = D.views[sid] || [];
     if (!rows.length) { dbody.appendChild(el("p", "empty", s.a === 0 ? T.no_list : T.no_data)); show(); return; }

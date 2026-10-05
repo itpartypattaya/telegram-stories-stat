@@ -47,6 +47,16 @@ def reaction_str(reaction) -> str | None:
     return kind
 
 
+def username_of(ent) -> str | None:
+    """The main username, or the first active collectible one."""
+    if getattr(ent, "username", None):
+        return ent.username
+    for item in getattr(ent, "usernames", None) or []:
+        if getattr(item, "active", True) and getattr(item, "username", None):
+            return item.username
+    return None
+
+
 def user_row(u) -> dict | None:
     if u is None or _name(u) not in ("User", "UserFull") and not hasattr(u, "first_name"):
         return None
@@ -330,6 +340,64 @@ class Api:
         from telethon.tl.functions.users import GetUsersRequest
         res = await self.call(GetUsersRequest(id=[peer]))
         return user_row(res[0]) if res else None
+
+    # ── groups (chat segments) ──
+    async def find_chat(self, source: str):
+        """A group by @username or numeric id (-100…). A private group without a username is found among
+        this account's dialogs — the account has to be a member."""
+        if source.startswith("@"):
+            return await self.client.get_entity(source)
+        marked = int(source)
+        try:
+            return await self.client.get_entity(marked)
+        except (ValueError, TypeError, KeyError):
+            pass
+        async for d in self.client.iter_dialogs():
+            if int(d.id) == marked:
+                return d.entity
+        raise ValueError(f"chat {source} is not among this account's chats")
+
+    @staticmethod
+    def chat_ref(ent) -> dict:
+        kind = _name(ent)
+        if kind in ("Channel", "ChannelForbidden"):
+            return {"type": "channel", "id": int(ent.id), "hash": int(ent.access_hash)}
+        if kind in ("Chat", "ChatForbidden"):
+            return {"type": "chat", "id": int(ent.id)}
+        raise ValueError(f"{kind} is not a group")
+
+    @staticmethod
+    def input_chat(ref: dict):
+        from telethon.tl.types import InputPeerChannel, InputPeerChat
+        if ref["type"] == "channel":
+            return InputPeerChannel(channel_id=ref["id"], access_hash=ref["hash"])
+        return InputPeerChat(chat_id=ref["id"])
+
+    async def chat_member_ids(self, peer) -> set:
+        return {int(u.id) async for u in self.client.iter_participants(peer)}
+
+    async def chat_has_member(self, peer, user_peer, user_id: int) -> bool:
+        """Is this person in the group right now? Raises when Telegram does not say (no rights, hidden list)."""
+        if _name(peer) == "InputPeerChannel":
+            from telethon.errors import UserNotParticipantError
+            from telethon.tl.functions.channels import GetParticipantRequest
+            try:
+                res = await self.call(GetParticipantRequest(channel=peer, participant=user_peer))
+            except UserNotParticipantError:
+                return False
+            p = getattr(res, "participant", None)
+            if _name(p) == "ChannelParticipantLeft":
+                return False
+            if _name(p) == "ChannelParticipantBanned":
+                rights = getattr(p, "banned_rights", None)
+                return not (getattr(p, "left", False) or getattr(rights, "view_messages", False))
+            return p is not None
+        from telethon.tl.functions.messages import GetFullChatRequest
+        res = await self.call(GetFullChatRequest(chat_id=peer.chat_id))
+        parts = getattr(getattr(res, "full_chat", None), "participants", None)
+        if _name(parts) != "ChatParticipants":
+            raise PermissionError("the member list of this group is not visible to this account")
+        return any(int(p.user_id) == int(user_id) for p in parts.participants)
 
     async def input_user(self, user_id: int, access_hash: int | None):
         from telethon.tl.types import InputPeerUser

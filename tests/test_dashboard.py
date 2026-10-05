@@ -78,6 +78,10 @@ class DashboardTest(unittest.TestCase):
         self.assertIn(EVIL_NAME, [p[0] for p in data["people"]])          # intact once parsed
         self.assertIn(EVIL_CAPTION, [s["c"] for s in data["stories"].values()])
         self.assertNotIn("{{", page.replace("{{DATA}}", ""))              # no placeholder left unfilled
+        bare = dashboard.TEMPLATE.read_text(encoding="utf-8")
+        self.assertIn("page template, without data", bare)               # opened as is, it says what it is
+        self.assertNotIn("page template, without data", page)
+        self.assertIn("<title>Stories dashboard · Owner</title>", page)
 
     def test_no_external_resources(self):
         page = self.page()

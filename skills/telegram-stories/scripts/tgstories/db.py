@@ -152,9 +152,19 @@ ALTER TABLE deliveries ADD COLUMN rule_digest TEXT;
 ALTER TABLE deliveries ADD COLUMN scope TEXT;
 """
 
+SCHEMA_V3 = """
+-- a direct link to each story, https://t.me/<username>/s/<id>; rebuilt when the account or channel changes
+-- its username (upsert_peer). No username, no public link: NULL
+ALTER TABLE stories ADD COLUMN link TEXT;
+UPDATE stories SET link = 'https://t.me/' || (SELECT username FROM peers WHERE peers.peer_id = stories.peer_id)
+                          || '/s/' || story_id
+ WHERE (SELECT username FROM peers WHERE peers.peer_id = stories.peer_id) IS NOT NULL;
+"""
+
 MIGRATIONS: list[tuple[int, str]] = [
     (1, SCHEMA_V1),
     (2, SCHEMA_V2),
+    (3, SCHEMA_V3),
 ]
 
 SCHEMA_VERSION = MIGRATIONS[-1][0]
@@ -250,12 +260,34 @@ def upsert_person(con, p: dict, *, ts: int | None = None) -> None:
     con.execute(f"UPDATE people SET {','.join(sets)} WHERE user_id=?", (*vals, p["user_id"]))
 
 
+def story_link(username: str | None, story_id) -> str | None:
+    """The public link of a story. Telegram opens it while the story is available to whoever opens it."""
+    return f"https://t.me/{username}/s/{int(story_id)}" if username else None
+
+
+def upsert_peer(con, peer_id: int, kind: str, title: str | None, username: str | None) -> None:
+    """Insert or refresh the account / a channel; a changed username rebuilds the links of its stories."""
+    old = con.execute("SELECT username FROM peers WHERE peer_id=?", (peer_id,)).fetchone()
+    con.execute("INSERT INTO peers(peer_id,kind,title,username,added_at) VALUES(?,?,?,?,?) "
+                "ON CONFLICT(peer_id) DO UPDATE SET title=excluded.title, username=excluded.username",
+                (peer_id, kind, title, username, now()))
+    if old is None or (old[0] or "") != (username or ""):
+        if username:
+            con.execute("UPDATE stories SET link='https://t.me/' || ? || '/s/' || story_id WHERE peer_id=?",
+                        (username, peer_id))
+        else:
+            con.execute("UPDATE stories SET link=NULL WHERE peer_id=?", (peer_id,))
+
+
 def upsert_story(con, s: dict, *, ts: int | None = None) -> bool:
     """Insert or update a story row. Returns True when the story is new."""
     ts = ts or now()
     exists = con.execute("SELECT 1 FROM stories WHERE peer_id=? AND story_id=?",
                          (s["peer_id"], s["story_id"])).fetchone()
     if not exists:
+        if "link" not in s:
+            peer = con.execute("SELECT username FROM peers WHERE peer_id=?", (s["peer_id"],)).fetchone()
+            s = {**s, "link": story_link(peer[0] if peer else None, s["story_id"])}
         cols = list(s)
         con.execute(
             f"INSERT INTO stories({','.join(cols)},first_seen,last_synced) "

@@ -1,3 +1,3 @@
 """telegram-stories: collect, analyse and act on Telegram story views."""
 
-__version__ = "1.2.0"
+__version__ = "1.3.0"

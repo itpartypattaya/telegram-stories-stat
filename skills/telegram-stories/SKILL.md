@@ -1,7 +1,7 @@
 ---
 name: telegram-stories
 description: "Telegram stories: who viewed, stats tables, auto-replies."
-version: 1.2.0
+version: 1.3.0
 author: "Anton Vaskov (itpartypattaya), https://t.me/passone"
 license: MIT
 compatibility: Hermes Agent >= 0.21 (written against 0.21.5); Python 3.10+; Telethon 1.40+ (tested 1.44)
@@ -62,6 +62,7 @@ Telegram re-run themselves with the interpreter that has Telethon.
 | Stop all automatic messages | `stop` (resume: `start`) |
 | Rules | `rule template` · `rule create --json '…'` · `rule preview N` · `rule activate N --confirm D` · `rule show N` · `rule pause N` |
 | Segments | `segment create vip @a @b` · `segment create close --kind close_friends` · `segment list` |
+| Members of a group | `segment create vibe --kind chat --source @group` (or a t.me link, or -100… id) · `segment refresh vibe` |
 
 Add `--format csv|json|text` to any table when Markdown is not wanted.
 
@@ -85,6 +86,9 @@ the end of a series, "reply to get it", "tell me when @someone opens it", warm-u
 1. Build the spec from the request (`rule template` shows the shape). Scope defaults to `contacts`;
    use `dialog` or `all` only when the owner asked for it in so many words. Rules that only notify the
    owner (`action: notify`) or fill a segment write to nobody and work with the autoresponder off.
+   "Only members of chat X" → a chat segment and `audience: {mode: segment, segment: …}`. Never a hand-made
+   static list for that: it does not follow people who join or leave, and only a chat segment is checked
+   with Telegram again right before each message.
 2. `rule create --json '…'` — the rule starts in shadow mode (records who would get it, sends nothing).
 3. `rule preview N` and show the owner the preview **verbatim**, including the text, the scope, the limits
    and the "would send to" count.

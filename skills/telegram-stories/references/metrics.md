@@ -65,6 +65,7 @@ The page uses the definitions above; these are the additions.
 | When people watch | First views by weekday × local hour; cell color relative to the busiest cell. |
 | Month by month | Calendar months, local time. Bar: people with a first view of any story that month. Dark part: people whose first view ever was that month. Line: median view counter of stories posted that month. |
 | Audience | The statuses and the table of `table people`. |
+| Open the story | `stories.link` = `https://t.me/<username>/s/<id>` (no username — no link). Telegram opens it while the story is available to whoever opens it. |
 
 ## Pulse and digests (sent by the service)
 

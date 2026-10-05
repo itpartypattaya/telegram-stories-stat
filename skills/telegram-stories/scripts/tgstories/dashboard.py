@@ -75,6 +75,27 @@ def grid_lines(top: int, step: int, y, L: int, right: int, cfg) -> list[str]:
             for v in range(0, top + 1, step)]
 
 
+def safe_link(url) -> str | None:
+    """Only t.me story links leave the page."""
+    return url if isinstance(url, str) and re.fullmatch(r"https://t\.me/[A-Za-z0-9_]{3,64}/s/\d+", url) else None
+
+
+def open_link(url, cfg, text=None, cls="go") -> str:
+    url = safe_link(url)
+    if not url:
+        return ""
+    return (f'<a class="{cls}" href="{e(url)}" target="_blank" rel="noopener noreferrer" '
+            f'title="{e(t(cfg, "d_open_note"))}">{e(text or t(cfg, "d_open_story"))} ↗</a>')
+
+
+def id_cell(it, cfg) -> str:
+    url = safe_link(it.get("link"))
+    if not url:
+        return str(it["story_id"])
+    return (f'<a href="{e(url)}" target="_blank" rel="noopener noreferrer" title="{e(t(cfg, "d_open_story"))}">'
+            f'{it["story_id"]}&nbsp;↗</a>')
+
+
 def _date(ts, tz, fmt="%d.%m.%Y") -> str:
     return datetime.fromtimestamp(ts, tz).strftime(fmt) if ts else ""
 
@@ -317,6 +338,7 @@ def gallery(items: list, cfg: dict, tz, thumbs: set) -> str:
                    f'<span class="badge {index_class(it["index"])}">{fmt_index(it["index"])}</span></div>'
                    f'<div class="dt2">{_date(it["posted_at"], tz)}</div>'
                    + (f'<p class="cp">{e(it["caption"])}</p>' if it.get("caption") else "")
+                   + (f'<div class="sp"></div>{open_link(it["link"], cfg)}' if safe_link(it.get("link")) else "")
                    + "</figcaption></figure>")
     return (f'<div class="card" style="margin-bottom:16px"><h2>{e(t(cfg, "d_top"))}</h2>'
             f'<p class="note">{e(t(cfg, "d_top_note"))}</p><div class="gallery">{"".join(out)}</div></div>')
@@ -334,7 +356,7 @@ def stories_table(items: list, cfg: dict, tz) -> str:
         ix, fh = it.get("index"), it.get("first_hour_share")
         young = f' title="{e(t(cfg, "d_young"))}"' if it.get("young") else ""
         rows.append(
-            f'<tr data-story="{it["story_id"]}" tabindex="0"><td class="n">{it["story_id"]}</td>'
+            f'<tr data-story="{it["story_id"]}" tabindex="0"><td class="n" data-v="{it["story_id"]}">{id_cell(it, cfg)}</td>'
             f'<td class="nw" data-v="{it["posted_at"]}">{_date(it["posted_at"], tz, "%d.%m.%y %H:%M")}</td>'
             f'<td class="c">{MEDIA_ICON.get(it.get("media_kind") or "", "")}</td>'
             f'<td class="cap"><span>{e(it.get("caption") or "")}</span></td>'
@@ -421,7 +443,7 @@ def channels_block(channels: list, cfg: dict, tz) -> str:
         items = ch["stories"]
         title = ch["title"] or (f"@{ch['username']}" if ch["username"] else str(ch["peer_id"]))
         rows = "".join(
-            f'<tr><td class="n">{s["story_id"]}</td><td class="nw" data-v="{s["posted_at"] or ""}">'
+            f'<tr><td class="n" data-v="{s["story_id"]}">{id_cell(s, cfg)}</td><td class="nw" data-v="{s["posted_at"] or ""}">'
             f'{_date(s["posted_at"], tz)}</td><td class="c">{MEDIA_ICON.get(s.get("media_kind") or "", "")}</td>'
             f'<td class="cap"><span>{e(s.get("caption") or "")}</span></td>'
             f'<td class="n">{e(fmt_num(s.get("views") or 0, cfg))}</td><td class="n">{s.get("reactions") or 0}</td>'
@@ -510,7 +532,7 @@ def _client_data(data: dict, cfg: dict, thumbs: set) -> dict:
                 "t": it["posted_at"], "k": it.get("media_kind") or "", "c": it.get("caption") or "",
                 "v": it["views"] or 0, "r": it.get("reactions") or 0, "rp": it.get("replies") or 0,
                 "f": it.get("forwards") or 0, "l": it.get("viewers_listed") or 0, "a": it.get("list_available"),
-                "ix": fmt_index(it.get("index")) or None,
+                "ix": fmt_index(it.get("index")) or None, "u": safe_link(it.get("link")) or "",
                 "th": f"th-{it['story_id']}" if it["story_id"] in thumbs else ""}
     reacts, ridx, views = [], {}, {}
     for r in data["views"]:
@@ -530,6 +552,7 @@ def _client_data(data: dict, cfg: dict, thumbs: set) -> dict:
             "no_data", "h", "m", "d")
     strings = {k: t(cfg, k) for k in keys}
     strings.update({"listed": t(cfg, "d_listed"), "no_list": t(cfg, "d_no_list"), "close": t(cfg, "d_close"),
+                    "open_story": t(cfg, "d_open_story"), "open_note": t(cfg, "d_open_note"),
                     "seen_stories": t(cfg, "d_seen_stories"),
                     "status": {s: t(cfg, s) for s in analytics.STATUS_ORDER}})
     return {"t": strings, "tz": getattr(tz, "key", None) or ("UTC" if off is not None and not off else None),
@@ -544,6 +567,19 @@ _SCRIPT_SAFE = str.maketrans({c: f"\\u{ord(c):04x}" for c in "<>&"})
 
 def _json_for_script(obj) -> str:
     return json.dumps(obj, ensure_ascii=False, separators=(",", ":")).translate(_SCRIPT_SAFE)
+
+
+# The template opens on its own as a page that says it is a template: the title, the body notice and the CSS
+# slots are real HTML/CSS there, and each is replaced as a whole here.
+_SLOTS = re.compile(r"<title>.*?</title>|<!--\{\{(BODY)\}\}-->.*?<!--/BODY-->|(?:/\*)?\{\{([A-Z_]+)\}\}(?:\*/)?",
+                    re.S)
+
+
+def _fill(m, values: dict) -> str:
+    if m.group(0).startswith("<title>"):
+        return f"<title>{values['TITLE']}</title>"
+    name = m.group(1) or m.group(2)
+    return values.get(name, m.group(0))
 
 
 def render(con, cfg: dict, data: dict, *, period: str | None = None, thumbs: bool = True) -> str:
@@ -594,8 +630,7 @@ def render(con, cfg: dict, data: dict, *, period: str | None = None, thumbs: boo
               "DATA": _json_for_script(_client_data(data, cfg, have)),
               "BODY": "\n".join(b for b in body if b)}
     # one pass: a name or caption that happens to contain "{{DATA}}" stays text, not a placeholder
-    return re.sub(r"\{\{([A-Z_]+)\}\}", lambda m: values.get(m.group(1), m.group(0)),
-                  TEMPLATE.read_text(encoding="utf-8"))
+    return _SLOTS.sub(lambda m: _fill(m, values), TEMPLATE.read_text(encoding="utf-8"))
 
 
 def default_path() -> Path:

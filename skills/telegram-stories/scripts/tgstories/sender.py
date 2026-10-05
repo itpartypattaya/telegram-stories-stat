@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import logging
 
-from . import config, db, rules
+from . import chats, config, db, rules
 
 log = logging.getLogger("telegram-stories")
 
@@ -185,6 +185,14 @@ class Sender:
                 if spec["scope"] == "dialog" and not await self._dialog_ok(d["user_id"], person["access_hash"]):
                     self._mark(d, "skipped", "scope_dialog")
                     continue
+                chat = chats.chat_segment_of(self.con, spec)
+                if chat:
+                    # the member list may be minutes old: ask Telegram about this one person now. Not a member,
+                    # or no clear answer — no message
+                    member = await chats.is_member(self.api, self.con, chat, peer, d["user_id"])
+                    if member is not True:
+                        self._mark(d, "skipped", "not_in_chat" if member is False else "chat_unverified")
+                        continue
                 if await self._owner_wrote_recently(peer):
                     self._mark(d, "skipped", "owner_wrote_recently")
                     continue

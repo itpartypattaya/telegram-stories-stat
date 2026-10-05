@@ -237,10 +237,7 @@ class Collector:
         ent = await self.api.entity(ref)
         peer_id = -int(ent.id)
         self._channels[peer_id] = ent
-        self.con.execute("INSERT INTO peers(peer_id,kind,title,username,added_at) VALUES(?,?,?,?,?) "
-                         "ON CONFLICT(peer_id) DO UPDATE SET title=excluded.title, username=excluded.username",
-                         (peer_id, "channel", getattr(ent, "title", None), getattr(ent, "username", None),
-                          db.now()))
+        db.upsert_peer(self.con, peer_id, "channel", getattr(ent, "title", None), tg.username_of(ent))
         return ent, peer_id
 
     async def poll_channel(self, ref: str, *, with_stats: bool = False) -> None:
@@ -408,9 +405,7 @@ async def _open(cfg):
     me = await client.get_me()
     db.set_meta(con, "owner_id", me.id)
     db.set_meta(con, "owner_premium", int(bool(getattr(me, "premium", False))))
-    con.execute("INSERT INTO peers(peer_id,kind,title,username,added_at) VALUES(?,?,?,?,?) "
-                "ON CONFLICT(peer_id) DO NOTHING",
-                (me.id, "self", " ".join(x for x in (me.first_name, me.last_name) if x), me.username, db.now()))
+    db.upsert_peer(con, me.id, "self", " ".join(x for x in (me.first_name, me.last_name) if x), tg.username_of(me))
     return client, con, me
 
 

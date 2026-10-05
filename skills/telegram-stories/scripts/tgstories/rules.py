@@ -344,7 +344,7 @@ def segment_members(con, name: str) -> set:
     if seg is None:
         return set()
     kind = seg["kind"]
-    if kind == "static":
+    if kind in ("static", "chat"):   # chat: the member list the service reads from Telegram
         return {r[0] for r in con.execute("SELECT user_id FROM segment_members WHERE segment=?", (name,))}
     if kind == "contacts":
         return {r[0] for r in con.execute("SELECT user_id FROM people WHERE is_contact=1")}
@@ -358,19 +358,64 @@ def segment_members(con, name: str) -> set:
     return set()
 
 
+def chat_note(con, name: str) -> str:
+    """«chat "Title", 39 people, list of 14:05» — or the error of the last read."""
+    from . import chats
+    i = chats.info(con, name)
+    when = datetime.fromtimestamp(i["refreshed_at"]).strftime("%d.%m %H:%M") if i.get("refreshed_at") else "never"
+    out = f"chat {i.get('title') or '?'!r}, {len(segment_members(con, name))} people, list read {when}"
+    if i.get("error"):
+        out += f"; last read FAILED: {i['error']}"
+    return out
+
+
+def _refresh_chats(cfg, con, names=None) -> int:
+    import asyncio
+
+    from . import chats, tg
+
+    async def go():
+        client = await tg.connect(cfg)
+        try:
+            return await chats.refresh_all(tg.Api(client), con, names)
+        finally:
+            await client.disconnect()
+
+    results = asyncio.run(go())
+    if not results:
+        print("no chat segments")
+    for name, data in results:
+        print(f"segment {name}: {chat_note(con, name)}")
+    return 1 if any(d.get("error") for _, d in results) else 0
+
+
 def segment_cli(cfg, args) -> int:
     con = db.connect(create=False)
     a = args.action
     if a == "list":
         for s in con.execute("SELECT * FROM segments ORDER BY name"):
+            if s["kind"] == "chat":
+                print(f"{s['name']}\tchat:{s['source']}\t{chat_note(con, s['name'])}")
+                continue
             print(f"{s['name']}\t{s['kind']}{(':' + s['source']) if s['source'] else ''}\t"
                   f"{len(segment_members(con, s['name']))} people")
         return 0
+    if a == "refresh":
+        return _refresh_chats(cfg, con, [args.name] if args.name else None)
     if not args.name:
         raise SystemExit("segment name is required")
     if a == "create":
+        source = args.source
+        if args.kind == "chat":
+            from . import chats
+            source = chats.normalize_source(args.source)
         con.execute("INSERT INTO segments(name,kind,source,created_at) VALUES(?,?,?,?)",
-                    (args.name, args.kind, args.source, db.now()))
+                    (args.name, args.kind, source, db.now()))
+        if args.kind == "chat":
+            code = _refresh_chats(cfg, con, [args.name])
+            if code:
+                print("The segment is kept; fix the cause and run `segment refresh " + args.name + "`.")
+            return code
         if args.members:
             for uid in _resolve_users(con, args.members):
                 con.execute("INSERT OR IGNORE INTO segment_members(segment,user_id,added_at) VALUES(?,?,?)",
@@ -399,6 +444,7 @@ def segment_cli(cfg, args) -> int:
     if a == "delete":
         con.execute("DELETE FROM segment_members WHERE segment=?", (args.name,))
         con.execute("DELETE FROM segments WHERE name=?", (args.name,))
+        con.execute("DELETE FROM state WHERE k=?", (f"chat_segment:{args.name}",))
         print("deleted")
         return 0
     return 1
@@ -413,9 +459,20 @@ def _summary(con, cfg, rule) -> str:
                + (f" (bound: {rule['bound_story_id']})" if rule["bound_story_id"] else ""),
                "tag": f"stories whose caption contains {st.get('tag')!r}", "all": "every story"}[st["mode"]]
     unseen = unseen_users(con, au.get("users", [])) if au["mode"] == "users" else []
+    seg = con.execute("SELECT kind FROM segments WHERE name=?", (au.get("segment"),)).fetchone() \
+        if au["mode"] == "segment" else None
+    if au["mode"] != "segment":
+        seg_text = ""
+    elif seg is None:
+        seg_text = f"segment {au.get('segment')!r} (does not exist yet — matches nobody)"
+    elif seg["kind"] == "chat":
+        seg_text = (f"members of the chat — segment {au.get('segment')!r}: {chat_note(con, au['segment'])}; "
+                    "each one checked with Telegram again right before a message")
+    else:
+        seg_text = f"segment {au.get('segment')!r}"
     audience = {"all": "everyone", "users": f"only {', '.join(au.get('users', []))}"
                 + (f" ({', '.join(unseen)}: no views yet — matched by username at the first one)" if unseen else ""),
-                "segment": f"segment {au.get('segment')!r}", "reacted": "people who reacted"
+                "segment": seg_text, "reacted": "people who reacted"
                 + (f" with {''.join(au.get('reactions') or [])}" if au.get("reactions") else ""),
                 "new": "first-time viewers", "status": f"audience status {au.get('status')}"}[au["mode"]]
     scope = {"contacts": "your contacts only", "dialog": "people who have written to you before",

@@ -9,7 +9,7 @@
   stories.py table story <id|last|-N> | summary --period 30d | people | hours | compare <id> <id>…
   stories.py report pulse [<id>] | digest --period 7d
   stories.py rule template|list|show|create|update|preview|activate|shadow|pause|delete
-  stories.py segment list|show|create|add|remove|delete
+  stories.py segment list|show|create|add|remove|delete|refresh   (--kind chat --source @group: group members)
   stories.py stop | start | status             autoresponder kill switch
   stories.py export views|stories|people [--period 90d]
   stories.py dashboard [--out FILE] [--period 30d|90d|1y|all] [--no-thumbs]   one-file HTML page
@@ -210,11 +210,12 @@ def build_parser() -> argparse.ArgumentParser:
     ru.set_defaults(func=cmd_rule)
 
     sg = sub.add_parser("segment", help="audience segments")
-    sg.add_argument("action", choices=["list", "show", "create", "add", "remove", "delete"])
+    sg.add_argument("action", choices=["list", "show", "create", "add", "remove", "delete", "refresh"])
     sg.add_argument("name", nargs="?")
     sg.add_argument("members", nargs="*", help="@username or numeric id")
-    sg.add_argument("--kind", default="static", choices=["static", "contacts", "mutual", "close_friends", "status"])
-    sg.add_argument("--source", help="status name for kind=status")
+    sg.add_argument("--kind", default="static",
+                    choices=["static", "contacts", "mutual", "close_friends", "status", "chat"])
+    sg.add_argument("--source", help="status name for kind=status; @group, t.me link or -100… id for kind=chat")
     sg.set_defaults(func=cmd_segment)
 
     for name in ("stop", "start", "status"):
@@ -245,7 +246,9 @@ def main(argv=None) -> int:
             pass
     args = build_parser().parse_args(argv)
     if args.cmd in TELEGRAM_COMMANDS or (args.cmd == "doctor" and not args.offline) \
-            or (args.cmd == "rule" and args.action in ("activate",)):
+            or (args.cmd == "rule" and args.action in ("activate",)) \
+            or (args.cmd == "segment" and (args.action == "refresh" or (args.action == "create" and
+                                                                     args.kind == "chat"))):
         _reexec_with_recorded_python()
     cfg = config.load_config()
     return int(args.func(args, cfg) or 0)

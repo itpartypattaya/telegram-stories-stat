@@ -23,7 +23,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from tgstories import config, db, notify, reports, tg  # noqa: E402
+from tgstories import chats, config, db, notify, reports, tg  # noqa: E402
 from tgstories.collector import Collector, ingest_private_message  # noqa: E402
 from tgstories.rules import Engine  # noqa: E402
 from tgstories.sender import Sender  # noqa: E402
@@ -104,6 +104,8 @@ async def main() -> int:
     db.set_meta(con, "owner_id", me.id)
     db.set_meta(con, "owner_premium", int(bool(getattr(me, "premium", False))))
     db.set_meta(con, "python", sys.executable)
+    # the account's username decides the story links; a change since the last start rebuilds them
+    db.upsert_peer(con, me.id, "self", " ".join(x for x in (me.first_name, me.last_name) if x), tg.username_of(me))
     api = tg.Api(client)
     engine = Engine(con, cfg)
 
@@ -172,6 +174,9 @@ async def main() -> int:
     async def send():
         await sender.run_once()
 
+    async def chat_segments():
+        await chats.refresh_all(api, con)     # nothing to do without chat segments: one query
+
     async def report():
         # marked as sent only after a confirmed delivery; a failed one is tried again next minute
         # (pulses stay due for 6 hours, a digest for the rest of its day)
@@ -199,6 +204,7 @@ async def main() -> int:
         asyncio.create_task(every(poll.get("new_stories_s", 300), new_stories, "new_stories", stop)),
         asyncio.create_task(every(poll.get("pinned_s", 1800), pinned, "pinned", stop)),
         asyncio.create_task(every(15, send, "sender", stop)),
+        asyncio.create_task(every(poll.get("chat_segments_s", 900), chat_segments, "chat_segments", stop)),
         asyncio.create_task(every(60, report, "reports", stop)),
     ]
     if cfg.get("channels"):

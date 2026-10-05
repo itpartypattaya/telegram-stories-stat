@@ -62,9 +62,7 @@ async def _finish(client, cfg: dict) -> int:
     db.set_meta(con, "owner_id", me.id)
     db.set_meta(con, "owner_premium", int(bool(getattr(me, "premium", False))))
     db.set_meta(con, "login_at", db.now())
-    con.execute("INSERT INTO peers(peer_id,kind,title,username,added_at) VALUES(?,?,?,?,?) "
-                "ON CONFLICT(peer_id) DO UPDATE SET title=excluded.title, username=excluded.username",
-                (me.id, "self", " ".join(x for x in (me.first_name, me.last_name) if x), me.username, db.now()))
+    db.upsert_peer(con, me.id, "self", " ".join(x for x in (me.first_name, me.last_name) if x), tg.username_of(me))
     name = " ".join(x for x in (me.first_name, me.last_name) if x)
     print(f"Logged in as {name}" + (f" (@{me.username})" if me.username else "") +
           f". Premium: {'yes' if getattr(me, 'premium', False) else 'no'}.")

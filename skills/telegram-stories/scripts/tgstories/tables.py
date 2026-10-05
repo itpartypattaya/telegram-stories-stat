@@ -247,6 +247,8 @@ def story_table(con, cfg, peer_id: int, ref) -> Table:
     kind = t(cfg, s.get("media_kind") or "photo") if s.get("media_kind") else ""
     title = (f"**{t(cfg, 'story_header')} {sid}** · {fmt_date(s['posted_at'], tz, True)} "
              f"{fmt_time(s['posted_at'], tz, s['posted_at'])} · {icon} {kind}").strip()
+    if s.get("link"):
+        title += f" · [{t(cfg, 'd_open_story')}]({s['link']})"
     notes = []
     if s.get("caption"):
         notes.append("_" + md_escape(caption_cut(s["caption"], 120)) + "_")
@@ -308,7 +310,7 @@ def summary_table(con, cfg, peer_id: int, start: int, end: int) -> Table:
                         "views": s["views"] if s["views"] is not None else "", "reactions": s.get("reactions") or 0,
                         "replies": s["replies"], "first_hour": f"{round(fh * 100)}%" if fh is not None else "",
                         "index": fmt_index(s["index"]) + (" ⏳" if s.get("young") and s["index"] else "")})
-        tb.plain.append({"story_id": s["story_id"], "posted_at": iso(s["posted_at"], tz),
+        tb.plain.append({"story_id": s["story_id"], "posted_at": iso(s["posted_at"], tz), "link": s.get("link") or "",
                          "media": s.get("media_kind") or "", "caption": s.get("caption") or "",
                          "views": s["views"], "viewers_listed": s.get("viewers_listed") or 0,
                          "reactions": s.get("reactions") or 0, "replies": s["replies"],
@@ -411,7 +413,7 @@ def channel_table(con, cfg, peer_id: int, start: int, end: int) -> Table:
                         "story": f"{icon} {md_escape(caption_cut(s.get('caption') or '', 28))}".strip(),
                         "views": s.get("views") or 0, "reactions": s.get("reactions") or 0,
                         "forwards": s.get("forwards") or 0})
-        tb.plain.append({"story_id": s["story_id"], "posted_at": iso(s["posted_at"], tz),
+        tb.plain.append({"story_id": s["story_id"], "posted_at": iso(s["posted_at"], tz), "link": s.get("link") or "",
                          "media": s.get("media_kind") or "", "caption": s.get("caption") or "",
                          "views": s.get("views") or 0, "reactions": s.get("reactions") or 0,
                          "forwards": s.get("forwards") or 0, "named_reactions": s["named_reactions"],
