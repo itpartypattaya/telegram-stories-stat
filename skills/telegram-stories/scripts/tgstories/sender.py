@@ -333,6 +333,20 @@ class Sender:
         for (rule_id,) in rows:
             self._pause(rule_id, f"a recipient hid your stories or blocked you (user {user_id})")
 
-    def on_reply(self, user_id: int) -> None:
-        self.con.execute("UPDATE deliveries SET replied_at=? WHERE user_id=? AND status='sent' AND replied_at IS NULL "
-                         "AND sent_at>?", (db.now(), user_id, db.now() - 30 * 86400))
+    def on_reply(self, user_id: int, reply_to: int | None = None) -> str | None:
+        """Link an incoming private message to an automatic message. A reply to that very message is 'direct'.
+        Any other message counts only for the latest automatic message this person got in the last 7 days, as
+        'after': they wrote after it, maybe about something else. Returns the link made, or None."""
+        now = db.now()
+        if reply_to:
+            if self.con.execute("UPDATE deliveries SET replied_at=COALESCE(replied_at, ?), reply_kind='direct' "
+                                "WHERE user_id=? AND status='sent' AND msg_id=?",
+                                (now, user_id, int(reply_to))).rowcount:
+                return "direct"
+        last = self.con.execute("SELECT rule_id, replied_at FROM deliveries WHERE user_id=? AND status='sent' AND "
+                                "sent_at>? ORDER BY sent_at DESC LIMIT 1", (user_id, now - 7 * 86400)).fetchone()
+        if last is None or last["replied_at"] is not None:
+            return None
+        self.con.execute("UPDATE deliveries SET replied_at=?, reply_kind='after' WHERE rule_id=? AND user_id=?",
+                         (now, last["rule_id"], user_id))
+        return "after"

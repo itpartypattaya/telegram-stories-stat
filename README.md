@@ -15,9 +15,11 @@ collects data and calculates statistics. The agent shows you the tables.
 
 ### 1. Viewer list
 
-The service checks your stories each minute. For each viewer, it records the name, the username, the time of
-the view and the reaction. At installation, the service loads the history of your past stories that Telegram
-keeps.
+The service checks your stories each minute while a rule is active, and each hour when no rule is active (see
+[How the service works](#how-the-service-works)). After a story expires, the service reads its viewer list one
+last time, so the views of the last minutes are not lost. For each viewer, it records the name, the username,
+the time of the view and the reaction. At installation, the service loads the history of your past stories that
+Telegram keeps.
 
 The database keeps the first name, the last name, all usernames and the Telegram ID of each viewer. When a
 viewer changes the name or the username, the database keeps the old values. In tables, the username is a link
@@ -41,7 +43,11 @@ Story 221 · 05.10.2026 14:01 · 📷 photo
 👁 133 · ❤ 7 · 💬 2 · ↪ 0 · vs usual +12%
 1h: 41 · 6h: 88 · 24h: 121 · 48h: 133 · new viewers: 3
 👥 101 · 📇 4 · · 28 · ⭐ 6
+data as of 07.10 14:05 · 128 of 133 in the list · final read after expiry 07.10 14:20
 ```
+
+The last line tells how complete the numbers are. The list can be shorter than the counter: Telegram does not
+list viewers in incognito mode and deleted accounts.
 
 | # | Time | After | Name | Username | Reaction | Who |
 |---:|---|---:|---|---|:---:|:---:|
@@ -58,6 +64,11 @@ One table shows all stories for a period: a week, a month or your dates. For eac
 views, the reactions and a comparison with your usual result. Below the table, you see the unique viewers, the
 new viewers and the viewers who stopped watching.
 
+- **New viewers** are people seen for the first time in the collected history. The table tells the date when
+  this history starts. A "new" viewer could have watched earlier stories that are not in the history.
+- **Stopped watching** is shown only when the period has at least two stories with viewer lists. If you did not
+  post, the table shows "—": nobody could stop watching.
+
 Ask the agent: *"Summary of my stories for September"*
 
 ### 4. Audience groups
@@ -70,15 +81,20 @@ The skill gives each viewer a status. The status is calculated from your last 20
 | regular | views 40% of your stories or more |
 | occasional | views less than 40% of your stories |
 | new | the first view was in the last 14 days |
-| cooling | no views for 21 days; viewed 40% of your stories or more before |
-| lost | no views for 60 days |
+| cooling | no views for 21 days and 2 or more of your stories missed; viewed 40% of your stories or more before |
+| lost | no views for 60 days and 3 or more of your stories missed |
+
+A pause in your posting does not make anybody "cooling" or "lost": these statuses need stories that the person
+did not view.
 
 Ask the agent: *"Who is my core audience?"* or *"Who stopped watching my stories?"*
 
 ### 5. Best time to post
 
 The table shows the views by hour and by day of the week. It also shows the posting hours that get the most
-views.
+viewers. To compare the stories fairly, the skill counts the viewers of each story in its first 24 hours. The table
+shows the median, the range and the number of stories for each hour. With few stories, take the result as an
+idea to test, not as a rule.
 
 Ask the agent: *"When is the best time to post a story?"*
 
@@ -133,6 +149,11 @@ Select a story to see its viewers. Select a person to see the stories that this 
 Ask the agent: *"Make the stories dashboard"*. The agent sends you the file.
 
 > **Note:** the file contains the names of your viewers. Do not forward it and do not publish it.
+
+To share the statistics, make an **anonymized copy**: `stories.py dashboard --anonymized` (the file
+`dashboard-anon.html`). The copy has all the numbers, the charts and the audience groups. It has no viewer
+names, usernames or Telegram IDs — not on the page and not in the data inside the file. The table of people,
+the viewer lists and the autoresponder rules are not in the copy. Your captions and story previews are in it.
 
 ## Installation
 
@@ -290,7 +311,8 @@ You want to know when each person opens the story. Each person gets a confirmati
 4. Answer "yes". The rule starts to work exactly as the preview shows. After each change, the rule goes back
    to test mode.
 5. To see the result, tell the agent: *"Show rule 3"*. You see who got the message, who did not get it and
-   why, and how many people replied.
+   why. Replies are counted in two ways: **replied to it** means that the person replied to that message;
+   **wrote after it** means that the person wrote to you in the next 7 days, maybe about something else.
 
 To stop all messages, tell the agent "stop" or run `stories.py stop`. To continue, run `stories.py start`.
 From your phone: Telegram → Settings → Devices → "Hermes Stories" → Terminate Session.
@@ -336,6 +358,7 @@ Telegram does not report new views. For this reason, the service checks the stor
 | when a counter increases | the new viewers in the list |
 | each 5 minutes | new stories |
 | each 30 minutes | stories pinned to the profile (for the first 30 days) |
+| after a story expires | the full viewer list one last time (within 7 days; without Premium, within 20 hours) |
 
 These numbers apply while at least one rule is active. **With no active rule, the service checks each hour.**
 When you activate a rule, the service goes back to the minute pace in less than a minute. At the hourly pace,
@@ -343,6 +366,7 @@ nothing is lost:
 
 - The pulse and the summaries read their stories again right before they go.
 - Tables and the dashboard read Telegram first if the data is older than 5 minutes (`--no-sync` skips this).
+  A table of an older story reads this story, and a channel table reads this channel.
 - Replies to stories arrive as messages, and the service records them at once.
 
 To keep the minute pace always, set `poll.idle_s: 0` in the config.
@@ -403,6 +427,7 @@ For details, see [`references/telegram-limits.md`](skills/telegram-stories/refer
 | `~/.hermes/data/telegram-stories/thumbs/` | small story previews (`backfill --no-thumbs` skips them) |
 | `~/.hermes/data/telegram-stories/exports/` | CSV files |
 | `~/.hermes/data/telegram-stories/dashboard/dashboard.html` | the dashboard (`stories.py dashboard` makes it again) |
+| `~/.hermes/data/telegram-stories/dashboard/dashboard-anon.html` | the anonymized copy (`stories.py dashboard --anonymized`) |
 
 How to see the data:
 
@@ -449,7 +474,7 @@ The agent runs these commands. You can also run them in a terminal.
 | `stories.py table compare 219 220 221` | a comparison of stories |
 | `stories.py table channel --peer @channel` | channel stories |
 | `stories.py export views --period 90d` | an export to CSV |
-| `stories.py dashboard [--period 1y]` | the HTML dashboard: one file; `--no-thumbs` makes it smaller |
+| `stories.py dashboard [--period 1y]` | the HTML dashboard: one file; `--no-thumbs` makes it smaller; `--anonymized` leaves out all viewer data |
 | `stories.py rule …` | autoresponder rules |
 | `stories.py segment create vibe --kind chat --source @group` | a segment of the members of a group (`segment refresh` reads it again now) |
 | `stories.py stop` / `start` | stop / continue all automatic messages |

@@ -6,6 +6,7 @@ Telegram sends no event when someone views a story, so the collector polls:
   every 5 minutes  newly posted stories
   every 30 minutes profile (pinned) stories younger than N days — they keep collecting views
   every 15 minutes channel stories (counts, reactions/reposts; Telegram hides channel viewers)
+  after expiry     one last full read of each expired story (finalize_expired)
 """
 from __future__ import annotations
 
@@ -36,6 +37,7 @@ class Collector:
         self._last_snapshot: dict = {}
         self._channels: dict = {}       # peer_id -> input entity
         self._thumbs_due: list = []      # (story, peer_id) found by the live poll: one thumbnail try each
+        self._final_retry_at: dict = {}  # story_id -> when a failed final read may be tried again
         self.live_thumbs = bool(cfg.get("backfill", {}).get("thumbs", True))
 
     # ── stories ────────────────────────────────────────────────────────────
@@ -106,6 +108,51 @@ class Collector:
             "SELECT story_id FROM stories WHERE peer_id=? AND deleted=0 AND pinned=1 AND expire_at<=? "
             "AND posted_at>?", (peer_id, now, now - age)).fetchall()
         return [r[0] for r in rows]
+
+    def finalize_due(self, peer_id: int | None = None, limit: int = 10) -> list[int]:
+        """Expired stories whose final read is still due, the ones closest to losing their list first.
+        Telegram keeps the viewer list of an expired story for 24 hours without Premium, for good with it."""
+        peer_id = peer_id or self.owner_id
+        now = db.now()
+        window = int(self.poll.get("finalize_window_s", 7 * 86400))
+        if peer_id == self.owner_id and db.get_meta(self.con, "owner_premium") == "0":
+            window = min(window, 20 * 3600)
+        rows = self.con.execute(
+            "SELECT story_id FROM stories WHERE peer_id=? AND deleted=0 AND finalized_at IS NULL AND expire_at<=? "
+            "AND expire_at>? ORDER BY expire_at", (peer_id, now, now - window)).fetchall()
+        return [r[0] for r in rows if self._final_retry_at.get(r[0], 0) <= now][:limit]
+
+    async def finalize_expired(self, peer=SELF, peer_id: int | None = None) -> int:
+        """One last read of each story that expired: its counters and, for your own stories, the full viewer
+        list. Views that came between the last poll and the expiry (up to an hour at the idle pace) are caught
+        here; they go through the rules like any other. A story is marked only after its read went through;
+        a failed one is tried again in 30 minutes, without holding up the others."""
+        peer_id = peer_id or self.owner_id
+        ids = self.finalize_due(peer_id)
+        if not ids:
+            return 0
+        now, found = db.now(), 0
+        for sid in ids:
+            self._last_full[sid] = now       # the full read below replaces the periodic one
+        try:
+            found += await self.poll_counters(ids, peer=peer, peer_id=peer_id)
+        except Exception as exc:  # noqa: BLE001 — the lists matter more than the final counters
+            if type(exc).__name__ == "FloodWaitError":
+                raise
+            log.info("final counters skipped: %s", type(exc).__name__)
+        for sid in ids:
+            try:
+                if peer_id == self.owner_id:
+                    found += await self.fetch_views(sid, peer=peer, peer_id=peer_id, full=True)
+            except Exception as exc:  # noqa: BLE001
+                if type(exc).__name__ == "FloodWaitError":
+                    raise
+                self._final_retry_at[sid] = db.now() + 1800
+                log.warning("final read of story %s failed (%s) — trying again in 30 min", sid, type(exc).__name__)
+                continue
+            self.con.execute("UPDATE stories SET finalized_at=? WHERE peer_id=? AND story_id=?",
+                             (db.now(), peer_id, sid))
+        return found
 
     # ── counters and viewer lists ──────────────────────────────────────────
     async def poll_counters(self, ids: list[int], peer=SELF, peer_id: int | None = None,
@@ -221,10 +268,13 @@ class Collector:
         available = None
         if total is not None:
             available = 1 if (total or 0) > 0 or (views_count or 0) == 0 else 0
-        self.con.execute("UPDATE stories SET list_available=COALESCE(?, list_available), list_synced=?, "
+        # a list that was read once stays "available": an empty answer later means Telegram stopped giving it
+        # (24 h after the expiry without Premium), and the viewers already stored are still a real list
+        self.con.execute("UPDATE stories SET list_available=CASE WHEN ?=0 AND list_available=1 THEN 1 "
+                         "ELSE COALESCE(?, list_available) END, list_synced=?, "
                          "views=COALESCE(views, ?), listed_views=COALESCE(?, listed_views) "
                          "WHERE peer_id=? AND story_id=?",
-                         (available, db.now(), views_count, views_count, peer_id, story_id))
+                         (available, available, db.now(), views_count, views_count, peer_id, story_id))
         if full:   # only a full read has seen every viewer's current reaction
             self.con.execute("UPDATE stories SET listed_reactions=COALESCE(?, listed_reactions) "
                              "WHERE peer_id=? AND story_id=?", (reactions_count, peer_id, story_id))
@@ -250,6 +300,8 @@ class Collector:
                 await self.channel_interactions(ent, peer_id, sid)
                 if with_stats:
                     await self.channel_stats(ent, peer_id, sid)
+        await self.finalize_expired(ent, peer_id)       # final counters of the ones that expired
+        db.set_state(self.con, f"channel_polled_at:{peer_id}", db.now())
 
     async def channel_interactions(self, ent, peer_id: int, story_id: int) -> int:
         n, offset = 0, None
@@ -409,11 +461,10 @@ async def _open(cfg):
     return client, con, me
 
 
-async def sync(api, con, cfg: dict, owner_id: int) -> tuple[int, int]:
-    """One pass outside the service: new stories, counters, viewer lists → (active stories, new viewers).
-
-    Views found here go through the rules engine exactly as in the service: the service sees no growth
-    afterwards, so a pass that skipped the engine would swallow the events an active rule is waiting for."""
+def _rules_hook(api, con, cfg: dict):
+    """Views found outside the service go through the rules engine exactly as in the service: the service
+    sees no growth afterwards, so a pass that skipped the engine would swallow the events an active rule is
+    waiting for."""
     from .rules import Engine
     from .sender import Sender
     engine, guard = Engine(con, cfg), Sender(api, con, cfg)
@@ -425,24 +476,57 @@ async def sync(api, con, cfg: dict, owner_id: int) -> tuple[int, int]:
                 guard.on_hidden(row["user_id"])
         except Exception:  # noqa: BLE001
             log.exception("rules engine")
+    return on_event
 
-    col = Collector(api, con, cfg, owner_id, on_view=on_event)
+
+async def sync(api, con, cfg: dict, owner_id: int) -> tuple[int, int]:
+    """One pass outside the service: new stories, counters, viewer lists, final reads of the stories that
+    expired → (active stories, new viewers)."""
+    col = Collector(api, con, cfg, owner_id, on_view=_rules_hook(api, con, cfg))
     await col.refresh_active()
     ids = col.active_ids()
     found = await col.poll_counters(ids)
+    found += await col.finalize_expired()
     db.set_state(con, "last_poll_at", db.now())
     return len(ids), found
 
 
-async def run_once(cfg: dict, verbose: bool = False) -> int:
+async def refresh_story(api, con, cfg: dict, owner_id: int, story_id: int) -> int:
+    """Re-read one story of your own that is no longer active (a table asked for it): its counters, and its
+    viewer list when the counter grew or the list was never read. A story missing from the database is fetched
+    by id first. Returns new viewers."""
+    col = Collector(api, con, cfg, owner_id, on_view=_rules_hook(api, con, cfg))
+    known = con.execute("SELECT 1 FROM stories WHERE peer_id=? AND story_id=?", (owner_id, story_id)).fetchone()
+    if known is None:
+        res = await api.by_id(SELF, [story_id])
+        col._ingest_users(getattr(res, "users", None))
+        if not col._ingest_stories(getattr(res, "stories", None) or [], owner_id):
+            return 0
+    return await col.poll_counters([story_id])
+
+
+async def run_refresh(cfg: dict, *, general: bool = True, story: int | None = None, channel: str | None = None,
+                      verbose: bool = False) -> int:
+    """Re-read what a command is about to show: the general pass (active stories, final reads), one older
+    story, or one channel."""
     client, con, me = await _open(cfg)
     try:
-        n, found = await sync(tg.Api(client), con, cfg, me.id)
-        if verbose:
-            print(f"{n} active stories, {found} new viewer(s)")
+        api = tg.Api(client)
+        if general:
+            n, found = await sync(api, con, cfg, me.id)
+            if verbose:
+                print(f"{n} active stories, {found} new viewer(s)")
+        if story is not None:
+            await refresh_story(api, con, cfg, me.id, story)
+        if channel:
+            await Collector(api, con, cfg, me.id).poll_channel(channel)
         return 0
     finally:
         await client.disconnect()
+
+
+async def run_once(cfg: dict, verbose: bool = False) -> int:
+    return await run_refresh(cfg, verbose=verbose)
 
 
 async def run_backfill(cfg: dict, channel: str | None = None, limit: int | None = None,

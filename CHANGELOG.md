@@ -4,6 +4,57 @@
 
 All notable changes of the skill. Versions follow `plugin.json` and `SKILL.md`. Newest first.
 
+## 1.5.0 — 2026-10-06
+
+Findings of an independent review of 1.4.0.
+
+### Fixed
+
+- **The preview of a `reply` rule counts replies.** Before, it counted the views: a person who only viewed the
+  story was in "would send to". Now the preview takes the events of the rule's trigger (replies, reactions or
+  views), counts a reply even if its view was never listed, and says how many people are outside the audience.
+- **The last views of a story are not lost.** After a story expires, the service reads its viewer list one last
+  time (within 7 days, `poll.finalize_window_s`; without Premium within 20 hours, while Telegram keeps the list).
+  Before, the views between the last poll and the expiry (up to an hour at the hourly pace) were never read. A
+  failed read is tried again in 30 minutes; channels get their final counters.
+- A list that Telegram stopped giving (24 hours after the expiry without Premium) no longer marks the story as
+  "no viewer list": the viewers already stored stay in comparisons.
+- **A table refreshes what it shows.** `table story <id>` of an older story reads that story (and fetches it if
+  it is not in the database); `table channel --peer @x` reads that channel. If the refresh fails, the note names
+  the time of that data.
+- **"Lost" and "cooling" need missed stories.** Before, 60 (21) days without a view were enough, so a pause in
+  your posting made the audience "lost". Now "lost" also needs 3 missed stories, "cooling" 2. "Stopped viewing"
+  in a summary is "—" when the period has fewer than 2 stories with a viewer list.
+- **Replies to automatic messages are linked honestly.** "Replied to it" is a reply to that very message.
+  Any other message counts only as "wrote within 7 days after it", and only for the latest automatic message.
+  Before, any message within 30 days marked every message to that person as replied.
+
+### Changed
+
+- **Best hours to post** compare the viewers of each story in its first 24 hours, not the final counters, and
+  show the range and the number of stories.
+- "New viewers" are named for what they are: first seen in the collected history, and the summary names the
+  date when that history starts.
+- Story and summary tables end with a quality line: when the data was read, how many viewers of the counter are
+  in the list, the final read after expiry, stories without a list.
+- README, SKILL.md and the references describe the hourly pace, the counter and the list the same way.
+
+### Added
+
+- **`stories.py dashboard --anonymized`**: a copy of the dashboard to show others (`dashboard-anon.html`). All
+  numbers, charts and audience groups; no viewer names, usernames or ids in the page or in its data. The table
+  of people, the viewer lists and the rules are left out; your captions and previews stay.
+
+### Removed
+
+- `stories.py login start` / `login finish` — the two-step login "for agents". A login code must not pass
+  through a chat; log in with `stories.py login` in a terminal (QR, or `--with-code`).
+
+### Upgrade
+
+- The database changes to schema v4 at the first start (two new columns). Stories whose list was already read
+  after the expiry count as finalized; replies recorded before count as "wrote after".
+
 ## 1.4.0 — 2026-10-06
 
 ### Changed

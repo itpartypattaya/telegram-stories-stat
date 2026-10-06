@@ -118,16 +118,16 @@ class AtTheHourlyPace(unittest.TestCase):
             cfg, con = cfg_with(home), db.connect()
             ran = []
 
-            async def run(c):
-                ran.append(1)
+            async def run(c, **todo):
+                ran.append(todo)
                 db.set_state(con, "last_poll_at", db.now())
 
             self.assertTrue(cli.freshen(cfg, run))           # never polled: old
             self.assertFalse(cli.freshen(cfg, run))          # just polled: fresh
-            self.assertEqual(len(ran), 1)
+            self.assertEqual(ran, [{"general": True, "story": None, "channel": None}])
             db.set_state(con, "last_poll_at", db.now() - 3600)
 
-            async def broken(c):
+            async def broken(c, **todo):
                 raise ConnectionError("offline")
 
             err = io.StringIO()

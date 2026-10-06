@@ -2,9 +2,8 @@
 """telegram-stories CLI.
 
   stories.py login [--with-code|--phone +…]   separate Telegram session by QR (run in a terminal)
-  stories.py login start --phone +… | finish --code …   two-step mode for agents (no cloud password)
   stories.py doctor                           health check
-  stories.py sync                             one collection pass (the service does this every minute)
+  stories.py sync                             one collection pass (the service runs them by itself)
   stories.py backfill [--channel @x] [--limit N]   import story history (resumable)
   stories.py table story <id|last|-N> | summary --period 30d | people | hours | compare <id> <id>…
   stories.py report pulse [<id>] | digest --period 7d
@@ -12,13 +11,14 @@
   stories.py segment list|show|create|add|remove|delete|refresh   (--kind chat --source @group: group members)
   stories.py stop | start | status             autoresponder kill switch
   stories.py export views|stories|people [--period 90d]
-  stories.py dashboard [--out FILE] [--period 30d|90d|1y|all] [--no-thumbs]   one-file HTML page
+  stories.py dashboard [--out FILE] [--period 30d|90d|1y|all] [--no-thumbs] [--anonymized]   one-file HTML
   stories.py notify-test
 
 Table and report commands read SQLite and work on any Python >= 3.10. Tables
-and the dashboard first re-read Telegram when the data is older than five
-minutes (with no active rule the service checks only hourly); `--no-sync`
-skips that. Commands that talk to Telegram need Telethon; if it is missing
+and the dashboard first re-read from Telegram what they show when it is older
+than five minutes (with no active rule the service checks only hourly): the
+active stories, an older story asked for by id, a channel. `--no-sync` skips
+that. Commands that talk to Telegram need Telethon; if it is missing
 here, the command re-runs itself with the interpreter the installer recorded.
 """
 from __future__ import annotations
@@ -72,25 +72,37 @@ def _has_telethon_or_reexec() -> bool:
     return False
 
 
-def freshen(cfg, run=None) -> bool:
-    """Re-read Telegram when the last poll is older than five minutes. A failure only prints a note to stderr:
-    the stored data is shown anyway. Returns True when a pass ran."""
+def target_of(args) -> tuple:
+    """What a command shows: ("story", ref), ("channel", ref) or ("all", None) — the refresh reads that."""
+    if args.cmd == "table":
+        peer = getattr(args, "peer", None)
+        if args.kind == "channel" or (peer and peer not in ("me", "self")):
+            return "channel", peer
+        if args.kind == "story":
+            return "story", args.refs[0] if args.refs else "last"
+    return "all", None
+
+
+def freshen(cfg, run=None, target: tuple | None = None) -> bool:
+    """Re-read from Telegram what the command shows when it is older than five minutes. A failure only prints
+    a note to stderr with the time of the stored data: that data is shown anyway. True when a pass ran."""
     from tgstories import pace
     try:
         con = db.connect(create=False)
     except SystemExit:
         return False
-    if not pace.stale(con):
+    todo = pace.plan(con, target)
+    if not any(todo.values()):
         return False
     if run is None:
         from tgstories import collector
-        run = collector.run_once
+        run = collector.run_refresh
     try:
-        asyncio.run(run(cfg))
+        asyncio.run(run(cfg, **todo))
         return True
     except (Exception, SystemExit) as exc:  # noqa: BLE001 — a table without the newest views beats no table
         from datetime import datetime
-        last = int(db.get_state(con, "last_poll_at", "0") or 0)
+        last = pace.data_time(con, target)
         when = datetime.fromtimestamp(last).strftime("%d.%m %H:%M") if last else "never"
         print(f"note: could not refresh from Telegram ({type(exc).__name__}); data as of {when}", file=sys.stderr)
         return False
@@ -100,14 +112,6 @@ def freshen(cfg, run=None) -> bool:
 
 def cmd_login(args, cfg) -> int:
     from tgstories import login
-    if args.step == "start":
-        if not args.phone:
-            raise SystemExit("login start needs --phone")
-        return asyncio.run(login.start(cfg, args.phone))
-    if args.step == "finish":
-        if not args.code:
-            raise SystemExit("login finish needs --code")
-        return asyncio.run(login.finish(cfg, args.code))
     if args.with_code or args.phone:
         return asyncio.run(login.interactive(cfg, args.phone))
     return asyncio.run(login.default(cfg))
@@ -187,7 +191,7 @@ def cmd_export(args, cfg) -> int:
 
 def cmd_dashboard(args, cfg) -> int:
     from tgstories import dashboard
-    print(dashboard.build(cfg, args.out, period=args.period, thumbs=not args.no_thumbs))
+    print(dashboard.build(cfg, args.out, period=args.period, thumbs=not args.no_thumbs, anonymized=args.anonymized))
     return 0
 
 
@@ -204,10 +208,8 @@ def build_parser() -> argparse.ArgumentParser:
     sub = p.add_subparsers(dest="cmd", required=True)
 
     lg = sub.add_parser("login", help="log the service in with its own Telegram session")
-    lg.add_argument("step", nargs="?", choices=["start", "finish"], help="two-step mode for agents")
     lg.add_argument("--phone", help="log in with phone + code instead of QR")
     lg.add_argument("--with-code", action="store_true", help="phone + code instead of QR")
-    lg.add_argument("--code", help="the code, for `login finish`")
     lg.add_argument("--qr", action="store_true", help="QR (the default; kept for old instructions)")
     lg.set_defaults(func=cmd_login)
 
@@ -275,6 +277,8 @@ def build_parser() -> argparse.ArgumentParser:
     ds.add_argument("--out", help="file to write (default: <data dir>/dashboard/dashboard.html)")
     ds.add_argument("--period", choices=["30d", "90d", "1y", "all"], help="tab open by default")
     ds.add_argument("--no-thumbs", action="store_true", help="leave story thumbnails out (smaller file)")
+    ds.add_argument("--anonymized", action="store_true",
+                    help="no viewer names, usernames or ids in the file (default file dashboard-anon.html)")
     ds.add_argument("--no-sync", action="store_true", help="do not re-read Telegram first, even if the data is old")
     ds.set_defaults(func=cmd_dashboard)
 
@@ -296,16 +300,16 @@ def main(argv=None) -> int:
             or (args.cmd == "segment" and (args.action == "refresh" or (args.action == "create" and
                                                                      args.kind == "chat"))):
         _reexec_with_recorded_python()
-    fresh = False
+    fresh, target = False, target_of(args)
     if args.cmd in FRESH_COMMANDS and not args.no_sync:
         try:
             from tgstories import pace
-            fresh = pace.stale(db.connect(create=False)) and _has_telethon_or_reexec()
+            fresh = any(pace.plan(db.connect(create=False), target).values()) and _has_telethon_or_reexec()
         except SystemExit:
             fresh = False
     cfg = config.load_config()
     if fresh:
-        freshen(cfg)
+        freshen(cfg, target=target)
     return int(args.func(args, cfg) or 0)
 
 

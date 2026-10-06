@@ -35,6 +35,7 @@ DEFAULTS: dict = {
         "snapshot_s": 600,          # counter snapshots during the first 48 h (growth curve)
         "reactions_refresh_s": 600, # full re-read of a list when only reactions changed
         "chat_segments_s": 900,     # member lists of chat segments ("only the members of this group")
+        "finalize_window_s": 604800,  # read an expired story once more within this time (24 h without Premium)
         "page_pause_s": 0.7,
     },
     "backfill": {"pause_s": 2.0, "thumbs": True},

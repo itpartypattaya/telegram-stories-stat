@@ -2,7 +2,8 @@
 """telegram-stories service: one process, one Telegram connection, no LLM.
 
 Loops (intervals from the config `poll` section):
-  counters     every minute: counters of active stories → new viewers → rules engine
+  counters     every minute: counters of active stories → new viewers → rules engine; then one last full
+               read of each story that has just expired
   new stories  every 5 minutes
   profile      every 30 minutes: pinned stories younger than N days
   channels     every 15 minutes (counts, reactions, reposts)
@@ -147,6 +148,7 @@ async def main() -> int:
         uid = event.sender_id
         hdr = getattr(msg, "reply_to", None)
         story_id = int(getattr(hdr, "story_id", 0) or 0) if type(hdr).__name__ == "MessageReplyStoryHeader" else None
+        reply_to = int(getattr(hdr, "reply_to_msg_id", 0) or 0) if type(hdr).__name__ == "MessageReplyHeader" else None
         try:
             who = await event.get_sender()
         except Exception:  # noqa: BLE001 — the profile is a bonus; the reply itself is still recorded
@@ -155,10 +157,11 @@ async def main() -> int:
                                        text_len=len(msg.message or ""), story_id=story_id)
         if reply:
             on_event("reply", reply)
-        sender.on_reply(uid)
+        sender.on_reply(uid, reply_to)
 
     async def counters():
         await col.poll_counters(col.active_ids())
+        await col.finalize_expired()      # views between the last poll and the expiry
         db.set_state(con, "last_poll_at", db.now())
 
     async def new_stories():

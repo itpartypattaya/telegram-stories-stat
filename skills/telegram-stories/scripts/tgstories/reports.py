@@ -75,7 +75,7 @@ def digest_text(con, cfg: dict, period: str = "7d", peer_id: int | None = None) 
     h = analytics.hours(con, peer_id, end - 90 * 86400, end, tz)
     if h["best_post_hours"]:
         parts.append(f"**{t(cfg, 'best_hours')}:** " + ", ".join(
-            f"{hh:02d}:00 (👁 {round(med)})" for hh, med, _ in h["best_post_hours"]))
+            f"{hh:02d}:00 (👁 {round(med)}, n={n})" for hh, med, n, _lo, _hi in h["best_post_hours"]))
     return "\n\n".join(parts)
 
 

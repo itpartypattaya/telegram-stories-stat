@@ -496,17 +496,37 @@ def _summary(con, cfg, rule) -> str:
     counts = dict(con.execute("SELECT status, COUNT(*) FROM deliveries WHERE rule_id=? GROUP BY status",
                               (rule["id"],)).fetchall())
     if counts:
-        replied = con.execute("SELECT COUNT(*) FROM deliveries WHERE rule_id=? AND replied_at IS NOT NULL",
-                              (rule["id"],)).fetchone()[0]
+        kinds = dict(con.execute("SELECT reply_kind, COUNT(*) FROM deliveries WHERE rule_id=? AND replied_at IS NOT "
+                                 "NULL GROUP BY reply_kind", (rule["id"],)).fetchall())
         lines.append("  deliveries: " + ", ".join(f"{k} {v}" for k, v in sorted(counts.items()))
-                     + (f"; replied {replied}" if counts.get("sent") else ""))
+                     + (f"; replied to it {kinds.get('direct', 0)}, wrote within 7 days after it "
+                        f"{kinds.get('after', 0)}" if counts.get("sent") else ""))
     if rule["paused_reason"]:
         lines.append(f"  paused: {rule['paused_reason']}")
     return "\n".join(lines)
 
 
+def collected_events(con, spec: dict, peer_id: int, story_id: int) -> list[dict]:
+    """The already collected events this rule's trigger reacts to, in the shape the live engine gets them:
+    replies for `reply` (a reply counts even when its view was never listed), views with a reaction for
+    `reaction`, views for `view`."""
+    if spec["trigger"] == "reply":
+        return [dict(r) for r in con.execute(
+            "SELECT peer_id, story_id, user_id, MIN(at) AS viewed_at FROM story_replies WHERE peer_id=? AND "
+            "story_id=? GROUP BY user_id ORDER BY viewed_at", (peer_id, story_id))]
+    rows = [dict(v) for v in con.execute("SELECT * FROM views WHERE peer_id=? AND story_id=? "
+                                         "ORDER BY first_viewed_at", (peer_id, story_id))]
+    return [v for v in rows if v.get("reaction")] if spec["trigger"] == "reaction" else rows
+
+
+EVENT_WORD = {"view": "views", "reaction": "reactions", "reply": "replies"}
+
+
 def simulate(con, cfg, rule) -> dict:
-    """Who would match among already collected views of the targeted stories (no sending)."""
+    """Who would match among the already collected events of the targeted stories (no sending): replies for a
+    reply rule, reactions for a reaction rule, views for a view rule. `would_send` passes the offline checks;
+    limits, quiet hours and the checks made right before a message (a fresh profile, chat membership) can still
+    hold some back."""
     spec = json.loads(rule["spec"])
     owner = db.owner_id(con)
     st = spec["stories"]
@@ -518,17 +538,16 @@ def simulate(con, cfg, rule) -> dict:
         ids = [r[0] for r in con.execute("SELECT story_id FROM stories WHERE peer_id=? ORDER BY posted_at DESC "
                                          "LIMIT 5", (owner,))]
     match, reasons = [], {}
-    seen = set()
+    seen, outside, events = set(), set(), 0
     for sid in ids:
         if not _story_matches(con, rule, spec, owner, sid):
             continue
-        for v in con.execute("SELECT * FROM views WHERE peer_id=? AND story_id=?", (owner, sid)):
-            v = dict(v)
+        for v in collected_events(con, spec, owner, sid):
+            events += 1
             if v["user_id"] in seen:
                 continue
-            if spec["trigger"] == "reaction" and not v.get("reaction"):
-                continue
             if not _audience_matches(con, spec, v["user_id"], v):
+                outside.add(v["user_id"])
                 continue
             seen.add(v["user_id"])
             r = precheck(con, cfg, spec, v["user_id"])
@@ -536,7 +555,11 @@ def simulate(con, cfg, rule) -> dict:
                 reasons[r] = reasons.get(r, 0) + 1
             else:
                 match.append(v["user_id"])
-    return {"stories": ids, "would_send": match, "excluded": reasons}
+    outside -= seen
+    if outside:
+        reasons["not_in_audience"] = len(outside)
+    return {"stories": ids, "events": events, "event": EVENT_WORD.get(spec["trigger"], "views"),
+            "would_send": match, "excluded": reasons}
 
 
 def _drop_queue(con, rule_id: int, reason: str, also_shadow: bool = False) -> int:
@@ -594,7 +617,8 @@ def cli(cfg, args) -> int:
         print(_summary(con, cfg, rule))
         sim = simulate(con, cfg, rule)
         if sim["stories"]:
-            print(f"  on already collected views of {sim['stories']}: would send to {len(sim['would_send'])}"
+            print(f"  on {sim['events']} already collected {sim['event']} of {sim['stories']}: "
+                  f"would send to {len(sim['would_send'])}"
                   + (", excluded: " + ", ".join(f"{k} {v}" for k, v in sim["excluded"].items())
                      if sim["excluded"] else ""))
         if not cfg.get("autoresponder", {}).get("enabled"):

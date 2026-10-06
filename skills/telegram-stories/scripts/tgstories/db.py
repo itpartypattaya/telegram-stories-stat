@@ -161,10 +161,23 @@ UPDATE stories SET link = 'https://t.me/' || (SELECT username FROM peers WHERE p
  WHERE (SELECT username FROM peers WHERE peers.peer_id = stories.peer_id) IS NOT NULL;
 """
 
+SCHEMA_V4 = """
+-- the full viewer-list read made after the story expired: views that came between the last poll and the
+-- expiry are caught here. Stories whose list was already read after the expiry (the history import) count
+-- as finalized; NULL = not yet (or too old to try)
+ALTER TABLE stories ADD COLUMN finalized_at INTEGER;
+UPDATE stories SET finalized_at = list_synced WHERE list_synced IS NOT NULL AND list_synced >= expire_at;
+-- how a reply to an automatic message is linked to it: 'direct' answers that very message, 'after' is only
+-- the next message from that person (all older rows were counted this loose way)
+ALTER TABLE deliveries ADD COLUMN reply_kind TEXT;
+UPDATE deliveries SET reply_kind = 'after' WHERE replied_at IS NOT NULL;
+"""
+
 MIGRATIONS: list[tuple[int, str]] = [
     (1, SCHEMA_V1),
     (2, SCHEMA_V2),
     (3, SCHEMA_V3),
+    (4, SCHEMA_V4),
 ]
 
 SCHEMA_VERSION = MIGRATIONS[-1][0]

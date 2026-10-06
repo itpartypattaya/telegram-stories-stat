@@ -1,6 +1,7 @@
 """Metrics over the collected data. Definitions: references/metrics.md."""
 from __future__ import annotations
 
+import bisect
 import re
 import statistics
 from datetime import datetime, timedelta
@@ -9,6 +10,9 @@ from . import db
 
 DAY = 86400
 HOUR = 3600
+# A list that covers most of the counter has trustworthy view times. The oldest imported stories have partial
+# lists (a third of the counter) with views dated weeks later: no "first 24 hours" can be read from them.
+FULL_LIST = "viewers_listed >= 0.8 * COALESCE(views, 0)"
 
 
 # ── periods and references ────────────────────────────────────────────────
@@ -158,8 +162,16 @@ def stories_in(con, peer_id: int, start: int, end: int) -> list[dict]:
     return out
 
 
+def history_start(con, peer_id: int) -> int | None:
+    """The first story with a viewer list: "new viewer" means first seen since then, not first ever."""
+    row = con.execute("SELECT MIN(posted_at) FROM stories WHERE peer_id=? AND deleted=0 AND list_available=1",
+                      (peer_id,)).fetchone()
+    return row[0] if row and row[0] else None
+
+
 def summary(con, peer_id: int, start: int, end: int) -> dict:
     items = stories_in(con, peer_id, start, end)
+    listed_in = sum(1 for i in items if i.get("list_available") == 1)
     views = [i["views"] for i in items if i["views"] is not None]
     unique = con.execute("SELECT COUNT(DISTINCT user_id) FROM views WHERE peer_id=? AND first_viewed_at>=? "
                          "AND first_viewed_at<?", (peer_id, start, end)).fetchone()[0]
@@ -170,7 +182,8 @@ def summary(con, peer_id: int, start: int, end: int) -> dict:
                             GROUP BY user_id HAVING COUNT(*)>=2)
                           WHERE user_id NOT IN (SELECT user_id FROM views WHERE peer_id=? AND first_viewed_at>=?
                                                 AND first_viewed_at<?)""",
-                       (peer_id, start - 30 * DAY, start, peer_id, start, end)).fetchone()[0] if start else 0
+                       (peer_id, start - 30 * DAY, start, peer_id, start, end)).fetchone()[0] \
+        if start and listed_in >= 2 else None   # a pause in posting is not people leaving: unknown, not zero
     active30 = con.execute("SELECT COUNT(DISTINCT user_id) FROM views WHERE peer_id=? AND first_viewed_at>=? "
                            "AND first_viewed_at<?", (peer_id, end - 30 * DAY, end)).fetchone()[0]
     return {
@@ -178,7 +191,7 @@ def summary(con, peer_id: int, start: int, end: int) -> dict:
         "reactions_total": sum(i["reactions"] or 0 for i in items),
         "replies_total": sum(i["replies"] for i in items),
         "unique_viewers": unique, "new_viewers": new, "lost_viewers": lost, "active_30d": active30,
-        "start": start, "end": end,
+        "start": start, "end": end, "history_start": history_start(con, peer_id),
     }
 
 
@@ -196,6 +209,11 @@ def people(con, peer_id: int, now: int | None = None) -> list[dict]:
     last_ids = {r[0] for r in last20}
     prev_ids = {r[0] for r in prev20}
     posted = {r[0]: r[1] for r in recent}
+    # stories with a list that had a day to be seen: "lost" and "cooling" need missed ones, not just time —
+    # when you post nothing, nobody can stop watching
+    seeable = sorted(r[0] for r in con.execute(
+        "SELECT posted_at FROM stories WHERE peer_id=? AND deleted=0 AND list_available=1 AND posted_at IS NOT NULL "
+        "AND posted_at<=?", (peer_id, now - DAY)))
     by_user: dict = {}
     for r in con.execute("SELECT v.user_id, v.story_id, v.first_viewed_at, v.reaction, s.posted_at, v.viewed_at "
                          "FROM views v JOIN stories s ON s.peer_id=v.peer_id AND s.story_id=v.story_id "
@@ -224,11 +242,12 @@ def people(con, peer_id: int, now: int | None = None) -> list[dict]:
         prev_share = (len(u["stories"] & prev_ids) / len(prev_ids)) if prev_ids else 0.0
         lag = median(u["lags"])
         last = u["last"] or 0
+        missed = len(seeable) - bisect.bisect_right(seeable, last)   # posted after their last view, unseen
         if first >= now - 14 * DAY:
             status = "new"
-        elif last < now - 60 * DAY:
+        elif last < now - 60 * DAY and missed >= 3:
             status = "lost"
-        elif last < now - 21 * DAY and max(prev_share, share) >= 0.4:
+        elif last < now - 21 * DAY and missed >= 2 and max(prev_share, share) >= 0.4:
             status = "cooling"
         elif share >= 0.7 and lag is not None and lag <= 3 * HOUR:
             status = "core"
@@ -240,7 +259,7 @@ def people(con, peer_id: int, now: int | None = None) -> list[dict]:
         out.append({**p, "user_id": uid, "seen_total": len(u["stories"]), "seen_last20": seen20,
                     "eligible_last20": len(eligible), "share": share, "lag": lag, "first": u["first"],
                     "last": u["last"], "reactions": u["reactions"], "replies": replies.get(uid, 0),
-                    "status": status})
+                    "missed": missed, "status": status})
     out.sort(key=lambda x: (STATUS_ORDER.index(x["status"]), -x["share"], -(x["last"] or 0)))
     return out
 
@@ -257,26 +276,31 @@ def hours(con, peer_id: int, start: int, end: int, tz) -> dict:
         by_hour[dt.hour] += 1
         by_day[dt.weekday()] += 1
         matrix[dt.weekday()][dt.hour] += 1
-    # posting hour → median reach of stories posted at that hour (3+ stories)
+    # posting hour → listed viewers within the first 24 hours of stories posted at that hour: the same window for
+    # every story (a final counter favours the old ones, a young one has not had its day). Only stories with a
+    # list that covers most of the counter, at least a day old; only hours with 3+ stories.
+    # (hour, median, stories, lowest, highest)
     post: dict = {}
-    for s in con.execute("SELECT posted_at, views FROM stories WHERE peer_id=? AND deleted=0 AND posted_at>=? "
-                         "AND posted_at<? AND views IS NOT NULL", (peer_id, start, end)):
-        h = datetime.fromtimestamp(s[0], tz).hour
-        post.setdefault(h, []).append(s[1])
-    best = sorted(((h, median(v), len(v)) for h, v in post.items() if len(v) >= 3),
+    for sid, ts in con.execute("SELECT story_id, posted_at FROM stories WHERE peer_id=? AND deleted=0 AND posted_at>=? "
+                               f"AND posted_at<? AND posted_at<=? AND list_available=1 AND {FULL_LIST}",
+                               (peer_id, start, end, db.now() - DAY)).fetchall():
+        n24 = story_at(con, peer_id, sid, 24)
+        if n24 is not None:
+            post.setdefault(datetime.fromtimestamp(ts, tz).hour, []).append(n24)
+    best = sorted(((h, median(v), len(v), min(v), max(v)) for h, v in post.items() if len(v) >= 3),
                   key=lambda x: -(x[1] or 0))[:3]
     return {"by_hour": by_hour, "by_day": by_day, "matrix": matrix, "best_post_hours": best, "total": sum(by_hour)}
 
 
 def speed(con, peer_id: int, start: int, end: int, marks=(1, 6, 24, 48)) -> dict:
-    """How fast a story collects its viewers. For every finished story with a viewer list: the share of its
-    listed viewers whose first view came within N hours, and the time by which half of them came. Returns
-    the medians over those stories."""
+    """How fast a story collects its viewers. For every finished story whose viewer list covers most of the
+    counter: the share of its listed viewers whose first view came within N hours, and the time by which half
+    of them came. Returns the medians over those stories."""
     lags: dict = {}
     for sid, lag in con.execute(
             "SELECT v.story_id, v.first_viewed_at - s.posted_at FROM views v JOIN stories s "
             "ON s.peer_id=v.peer_id AND s.story_id=v.story_id WHERE v.peer_id=? AND s.deleted=0 "
-            "AND s.list_available=1 AND s.posted_at>=? AND s.posted_at<? AND s.posted_at<? "
+            f"AND s.list_available=1 AND s.{FULL_LIST} AND s.posted_at>=? AND s.posted_at<? AND s.posted_at<? "
             "AND v.first_viewed_at IS NOT NULL", (peer_id, start, end, db.now() - 48 * HOUR)):
         lags.setdefault(sid, []).append(max(0, lag))
     shares = {h: [] for h in marks}

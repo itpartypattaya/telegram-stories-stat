@@ -238,6 +238,25 @@ def resolve_peer(con, ref: str | None) -> tuple[int, str]:
 
 # ── tables ─────────────────────────────────────────────────────────────────
 
+def story_quality(s: dict, cfg, tz, listed: int) -> str:
+    """How complete the numbers above are: when they were read, how much of the counter the list covers, and
+    whether the last read after the expiry happened. The gap between the counter and the list is not "hidden
+    viewers" by itself (incognito, deleted accounts, a list Telegram stopped giving)."""
+    parts = [t(cfg, "data_as_of").format(when=fmt_time(s.get("last_synced"), tz) or "—")]
+    if s.get("list_available") == 1 and s.get("views") is not None:
+        parts.append(t(cfg, "in_list").format(n=listed, v=s["views"]))
+    now = db.now()
+    if s.get("finalized_at"):
+        parts.append(t(cfg, "final_done").format(when=fmt_time(s["finalized_at"], tz)))
+    elif (s.get("expire_at") or 0) > now:
+        parts.append(t(cfg, "final_active"))
+    elif now - (s.get("expire_at") or 0) < 7 * 86400 and s.get("peer_id") == s.get("owner_id"):
+        parts.append(t(cfg, "final_due"))
+    else:
+        parts.append(t(cfg, "final_none"))
+    return "_" + md_escape(" · ".join(parts)) + "_"
+
+
 def story_table(con, cfg, peer_id: int, ref) -> Table:
     tz = config.get_tz(cfg)
     sid = analytics.resolve_story(con, peer_id, ref)
@@ -266,6 +285,7 @@ def story_table(con, cfg, peer_id: int, ref) -> Table:
                      + (f" · ⭐ {c['close_friend']}" if c["close_friend"] else ""))
     elif m["list_available"] == 0:
         notes.append("_" + md_escape(t(cfg, "viewers_hidden")) + "_")
+    notes.append(story_quality({**s, "owner_id": db.owner_id(con)}, cfg, tz, m["listed"]))
     cols = [Col("n", t(cfg, "n"), "right"), Col("time", t(cfg, "time")), Col("after", t(cfg, "after"), "right"),
             Col("name", t(cfg, "name")), Col("nick", t(cfg, "nick")), Col("reaction", t(cfg, "reaction"), "center"),
             Col("who", t(cfg, "who"), "center")]
@@ -292,10 +312,23 @@ def summary_table(con, cfg, peer_id: int, start: int, end: int) -> Table:
     title = (f"**{t(cfg, 'summary_header')}** · {fmt_date(start, tz, True) if start else '…'} — "
              f"{fmt_date(end - 1, tz, True)}")
     med = sm["views_median"]
+    lost = sm["lost_viewers"]
     notes = [f"{t(cfg, 'stories')}: {sm['count']} · 👁 {sm['views_total']} · {t(cfg, 'median').lower()} "
              f"{round(med) if med is not None else '—'} · ❤ {sm['reactions_total']} · 💬 {sm['replies_total']}",
              f"{t(cfg, 'unique_viewers')}: {sm['unique_viewers']} · {t(cfg, 'new_viewers')}: {sm['new_viewers']} · "
-             f"{t(cfg, 'lost_viewers')}: {sm['lost_viewers']} · {t(cfg, 'active_30d')}: {sm['active_30d']}"]
+             f"{t(cfg, 'lost_viewers')}: {lost if lost is not None else '—'} · "
+             f"{t(cfg, 'active_30d')}: {sm['active_30d']}"]
+    quality = [t(cfg, "data_as_of").format(when=fmt_time(int(db.get_state(con, "last_poll_at", "0") or 0), tz) or "—")]
+    no_list = sum(1 for s in sm["items"] if s.get("list_available") != 1)
+    due = sum(1 for s in sm["items"] if not s.get("finalized_at") and (s.get("expire_at") or 0) <= db.now()
+              and db.now() - (s.get("expire_at") or 0) < 7 * 86400)
+    if no_list:
+        quality.append(t(cfg, "q_no_list").format(n=no_list))
+    if due:
+        quality.append(t(cfg, "q_final_due").format(n=due))
+    if sm.get("history_start"):
+        quality.append(t(cfg, "new_note").format(date=fmt_date(sm["history_start"], tz, True)))
+    notes.append("_" + md_escape(" · ".join(quality)) + "_")
     cols = [Col("id", t(cfg, "id"), "right"), Col("date", t(cfg, "date")), Col("story", t(cfg, "story")),
             Col("views", "👁", "right"), Col("reactions", "❤", "right"), Col("replies", "💬", "right"),
             Col("first_hour", t(cfg, "first_hour"), "right"), Col("index", t(cfg, "index"), "right")]
@@ -362,8 +395,8 @@ def hours_tables(con, cfg, peer_id: int, start: int, end: int) -> list:
                         "bar": "▇" * max(0, round(n * 12 / peak))})
         th.plain.append({"hour": hour, "views": n, "share": round(n / total, 4)})
     if h["best_post_hours"]:
-        th.footer.append(f"{t(cfg, 'best_hours')}: " + ", ".join(
-            f"{hh:02d}:00 (👁 {round(med)}, n={n})" for hh, med, n in h["best_post_hours"]))
+        th.footer.append(f"{t(cfg, 'best_hours')} ({t(cfg, 'best_hours_note')}): " + ", ".join(
+            f"{hh:02d}:00 — {round(med)} ({lo}–{hi}, n={n})" for hh, med, n, lo, hi in h["best_post_hours"]))
     peak_d = max(h["by_day"]) or 1
     td = Table(cols=[Col("day", t(cfg, "weekday")), Col("views", "👁", "right"), Col("share", "%", "right"),
                      Col("bar", "")], title=f"**{t(cfg, 'days_header')}**")

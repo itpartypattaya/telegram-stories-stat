@@ -126,11 +126,12 @@ def collect(con, cfg: dict, *, now: int | None = None) -> dict:
         channels.append({"peer_id": row["peer_id"], "title": row["title"], "username": row["username"],
                          "stories": analytics.channel(con, row["peer_id"], 0, now + 1)})
     counts: dict = {}
-    for r in con.execute("SELECT rule_id, status, COUNT(*) n, SUM(replied_at IS NOT NULL) replied "
-                         "FROM deliveries GROUP BY rule_id, status"):
-        c = counts.setdefault(r["rule_id"], {"replied": 0})
+    for r in con.execute("SELECT rule_id, status, COUNT(*) n, SUM(reply_kind='direct') direct, "
+                         "SUM(reply_kind='after') after FROM deliveries GROUP BY rule_id, status"):
+        c = counts.setdefault(r["rule_id"], {"replied": 0, "after": 0})
         c[r["status"]] = r["n"]
-        c["replied"] += r["replied"] or 0
+        c["replied"] += r["direct"] or 0
+        c["after"] += r["after"] or 0
     rules = []
     for r in con.execute("SELECT id, name, status, spec FROM rules ORDER BY id"):
         try:
@@ -138,7 +139,7 @@ def collect(con, cfg: dict, *, now: int | None = None) -> dict:
         except (TypeError, ValueError):
             spec = {}
         rules.append({"id": r["id"], "name": r["name"], "status": r["status"], "spec": spec,
-                      "counts": counts.get(r["id"], {"replied": 0})})
+                      "counts": counts.get(r["id"], {"replied": 0, "after": 0})})
     return {
         "peer_id": peer, "owner": dict(owner) if owner else {}, "now": now, "tz": tz,
         "last_poll": int(db.get_state(con, "last_poll_at", "0") or 0),
@@ -273,8 +274,8 @@ def best_hours(h: dict, cfg: dict) -> str:
     if not h["best_post_hours"]:
         return f'<p class="empty">{e(t(cfg, "no_data"))}</p>'
     return '<div class="hours">' + "".join(
-        f'<span class="chip"><b>{hh:02d}:00</b> · 👁 {e(fmt_num(med, cfg))} · n={n}</span>'
-        for hh, med, n in h["best_post_hours"]) + "</div>"
+        f'<span class="chip"><b>{hh:02d}:00</b> · 👁 {e(fmt_num(med, cfg))} ({lo}–{hi}) · n={n}</span>'
+        for hh, med, n, lo, hi in h["best_post_hours"]) + "</div>"
 
 
 def speed_block(sp: dict, cfg: dict) -> str:
@@ -309,7 +310,7 @@ def kpis(p: dict, cfg: dict) -> str:
     for _, label, key, good_up in cards:
         cur = sm.get(key)
         delta = ""
-        if prev is not None and prev.get("count"):
+        if cur is not None and prev is not None and prev.get("count"):
             before = prev.get(key)
             if before:
                 ch = (cur or 0) / before - 1
@@ -391,7 +392,7 @@ def period_panel(p: dict, cfg: dict, tz, tz_label: str, thumbs: set) -> str:
     return "".join(body)
 
 
-def audience(people: list, cfg: dict, tz) -> str:
+def audience(people: list, cfg: dict, tz, anonymized: bool = False) -> str:
     counts = {s: 0 for s in analytics.STATUS_ORDER}
     for p in people:
         counts[p["status"]] += 1
@@ -402,6 +403,9 @@ def audience(people: list, cfg: dict, tz) -> str:
         f'<div class="k" data-status-filter="{s}"><i style="background:{STATUS_COLOR[s]}"></i><span>'
         f'<b>{e(t(cfg, s))} · {e(fmt_num(counts[s], cfg))}</b> — {e(t(cfg, "d_status_" + s))}</span></div>'
         for s in analytics.STATUS_ORDER)
+    if anonymized:     # the groups only: no table, no names in the file
+        return (f'<section class="block"><h2>{e(t(cfg, "people_header"))}</h2><div class="card">'
+                f'<div class="sbar">{bar}</div><div class="slegend">{legend}</div></div></section>')
     options = "".join(f'<option value="{s}">{e(t(cfg, s))} ({counts[s]})</option>'
                       for s in analytics.STATUS_ORDER if counts[s])
     head = (f'<tr><th data-sort="text">{e(t(cfg, "name"))}</th><th data-sort="text">{e(t(cfg, "nick"))}</th>'
@@ -476,6 +480,7 @@ def autoresponder_block(data: dict, cfg: dict) -> str:
         head = (f'<tr><th class="n">{e(t(cfg, "id"))}</th><th>{e(t(cfg, "d_rule"))}</th><th>{e(t(cfg, "status"))}</th>'
                 f'<th>{e(t(cfg, "d_action"))}</th><th>{e(t(cfg, "d_scope"))}</th>'
                 f'<th class="n">{e(t(cfg, "d_sent"))}</th><th class="n">{e(t(cfg, "d_replied"))}</th>'
+                f'<th class="n">{e(t(cfg, "d_wrote_after"))}</th>'
                 f'<th class="n">{e(t(cfg, "d_queued"))}</th><th class="n">{e(t(cfg, "d_skipped"))}</th>'
                 f'<th class="n">{e(t(cfg, "d_failed"))}</th><th class="n">{e(t(cfg, "d_test"))}</th></tr>')
         rows = []
@@ -488,6 +493,7 @@ def autoresponder_block(data: dict, cfg: dict) -> str:
                         f'<td>{e(t(cfg, "d_a_" + action) if action else "")}</td>'
                         f'<td>{e(scope if action == "dm" else "—")}</td>'
                         f'<td class="n">{c.get("sent", 0)}</td><td class="n">{c.get("replied", 0)}</td>'
+                        f'<td class="n">{c.get("after", 0)}</td>'
                         f'<td class="n">{c.get("queued", 0)}</td><td class="n">{c.get("skipped", 0)}</td>'
                         f'<td class="n">{c.get("failed", 0)}</td><td class="n">{c.get("shadow", 0)}</td></tr>')
         body = f'<div class="tw"><table><thead>{head}</thead><tbody>{"".join(rows)}</tbody></table></div>'
@@ -517,10 +523,11 @@ def _thumbs_css(con, peer_id: int, ids: set) -> tuple[str, set]:
     return "\n".join(css), have
 
 
-def _client_data(data: dict, cfg: dict, thumbs: set) -> dict:
-    """What the script needs for viewer lists: people, stories, views — compact."""
+def _client_data(data: dict, cfg: dict, thumbs: set, anonymized: bool = False) -> dict:
+    """What the script needs for viewer lists: people, stories, views — compact. Anonymized: no people and no
+    viewer rows at all, so the file holds nobody's name, username or id."""
     pidx, people = {}, []
-    for p in data["people"]:
+    for p in [] if anonymized else data["people"]:
         pidx[p["user_id"]] = len(people)
         people.append([full_name(p), p.get("username") or "", who_cell(p), p["status"], p.get("first") or 0])
     stories = {}
@@ -553,12 +560,13 @@ def _client_data(data: dict, cfg: dict, thumbs: set) -> dict:
     strings = {k: t(cfg, k) for k in keys}
     strings.update({"listed": t(cfg, "d_listed"), "no_list": t(cfg, "d_no_list"), "close": t(cfg, "d_close"),
                     "open_story": t(cfg, "d_open_story"), "open_note": t(cfg, "d_open_note"),
-                    "seen_stories": t(cfg, "d_seen_stories"),
+                    "seen_stories": t(cfg, "d_seen_stories"), "anon": t(cfg, "d_anon_list"),
                     "status": {s: t(cfg, s) for s in analytics.STATUS_ORDER}})
     return {"t": strings, "tz": getattr(tz, "key", None) or ("UTC" if off is not None and not off else None),
             "off": int(off.total_seconds() // 60) if off is not None else 0,
             "sep": " " if cfg.get("locale") == "ru" else ",",
-            "icons": MEDIA_ICON, "people": people, "stories": stories, "views": views, "reacts": reacts}
+            "icons": MEDIA_ICON, "people": people, "stories": stories, "views": views, "reacts": reacts,
+            "anon": anonymized}
 
 
 # inside <script type="application/json"> a "<" could close the element: these three go as JSON escapes
@@ -582,7 +590,8 @@ def _fill(m, values: dict) -> str:
     return values.get(name, m.group(0))
 
 
-def render(con, cfg: dict, data: dict, *, period: str | None = None, thumbs: bool = True) -> str:
+def render(con, cfg: dict, data: dict, *, period: str | None = None, thumbs: bool = True,
+           anonymized: bool = False) -> str:
     tz = data["tz"]
     tz_label = (cfg.get("timezone") or "").strip() or datetime.fromtimestamp(data["now"], tz).strftime("UTC%z")
     selected = default_period(data, period)
@@ -607,7 +616,7 @@ def render(con, cfg: dict, data: dict, *, period: str | None = None, thumbs: boo
         sub += f' · {e(t(cfg, "d_data_at"))} {_date(data["last_poll"], tz, "%d.%m.%Y %H:%M")}'
     body = [f'<header class="top"><div><h1>{e(t(cfg, "d_title"))}</h1><div class="sub">{e(who)}'
             f'{" · " if who else ""}{sub}</div></div><div class="chips">{"".join(chips)}</div></header>',
-            f'<p class="private">🔒 {e(t(cfg, "d_private"))}</p>']
+            f'<p class="private">🔒 {e(t(cfg, "d_anon" if anonymized else "d_private"))}</p>']
     radios = "".join(f'<input class="tab-input" type="radio" name="period" id="p-{p["key"]}"'
                      f'{" checked" if p["key"] == selected else ""}>' for p in data["periods"])
     labels = "".join(f'<label for="p-{p["key"]}">{e(t(cfg, "d_p" + p["key"]))}</label>' for p in data["periods"])
@@ -616,9 +625,10 @@ def render(con, cfg: dict, data: dict, *, period: str | None = None, thumbs: boo
     body.append(f'{radios}<nav class="tabs">{labels}</nav><div class="panels">{panels}</div>')
     body.append(f'<section class="block"><h2>{e(t(cfg, "d_trend"))}</h2><div class="card">'
                 f'<p class="note">{e(t(cfg, "d_trend_note"))}</p>{trend_svg(data["monthly"], cfg)}</div></section>')
-    body.append(audience(data["people"], cfg, tz))
+    body.append(audience(data["people"], cfg, tz, anonymized))
     body.append(channels_block(data["channels"], cfg, tz))
-    body.append(autoresponder_block(data, cfg))
+    if not anonymized:     # rule names and audiences name people
+        body.append(autoresponder_block(data, cfg))
     body.append(f'<footer>{e(t(cfg, "d_footer").replace("{v}", __version__))}</footer>')
 
     tab_css = "\n".join(
@@ -627,21 +637,21 @@ def render(con, cfg: dict, data: dict, *, period: str | None = None, thumbs: boo
         for p in data["periods"])
     values = {"TAB_CSS": tab_css, "THUMBS": thumbs_css, "LANG": e(cfg.get("locale") or "en"),
               "TITLE": e(t(cfg, "d_title") + (f" · {owner['title']}" if owner.get("title") else "")),
-              "DATA": _json_for_script(_client_data(data, cfg, have)),
+              "DATA": _json_for_script(_client_data(data, cfg, have, anonymized)),
               "BODY": "\n".join(b for b in body if b)}
     # one pass: a name or caption that happens to contain "{{DATA}}" stays text, not a placeholder
     return _SLOTS.sub(lambda m: _fill(m, values), TEMPLATE.read_text(encoding="utf-8"))
 
 
-def default_path() -> Path:
-    return config.data_dir() / "dashboard" / "dashboard.html"
+def default_path(anonymized: bool = False) -> Path:
+    return config.data_dir() / "dashboard" / ("dashboard-anon.html" if anonymized else "dashboard.html")
 
 
 def build(cfg: dict, out: str | Path | None = None, *, period: str | None = None, thumbs: bool = True,
-          con=None) -> Path:
+          con=None, anonymized: bool = False) -> Path:
     con = con or db.connect(create=False)
-    page = render(con, cfg, collect(con, cfg), period=period, thumbs=thumbs)
-    path = Path(out) if out else default_path()
+    page = render(con, cfg, collect(con, cfg), period=period, thumbs=thumbs, anonymized=anonymized)
+    path = Path(out) if out else default_path(anonymized)
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(prefix=".dashboard.", suffix=".html", dir=str(path.parent))
     try:

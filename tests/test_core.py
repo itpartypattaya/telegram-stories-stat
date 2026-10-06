@@ -157,7 +157,13 @@ class AnalyticsTest(unittest.TestCase):
             self.assertEqual(ppl[10]["seen_total"], 2)
             self.assertEqual(ppl[10]["status"], "new")  # first seen within 14 days
             far = {p["user_id"]: p for p in analytics.people(con, 1, now=T0 + 100 * 86400)}
+            self.assertNotEqual(far[10]["status"], "lost")    # nothing was posted since: nobody could stop watching
+            for i in range(3):                                # three later stories Ann did not watch
+                db.upsert_story(con, collector.tg.story_row(story(200 + i, T0 + (10 + i) * 86400), 1))
+                con.execute("UPDATE stories SET list_available=1 WHERE story_id=?", (200 + i,))
+            far = {p["user_id"]: p for p in analytics.people(con, 1, now=T0 + 100 * 86400)}
             self.assertEqual(far[10]["status"], "lost")
+            self.assertEqual(far[10]["missed"], 3)
 
     def test_parse_period(self):
         from datetime import timezone

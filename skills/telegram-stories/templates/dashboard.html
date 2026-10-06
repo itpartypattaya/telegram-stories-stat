@@ -321,7 +321,7 @@ dialog::backdrop{background:rgb(10 14 20 / .55)}
     }
     header(thumb(s.th, s.k), T.story + " " + sid, meta, s.c);
     var rows = D.views[sid] || [];
-    if (!rows.length) { dbody.appendChild(el("p", "empty", s.a === 0 ? T.no_list : T.no_data)); show(); return; }
+    if (!rows.length) { dbody.appendChild(el("p", "empty", D.anon ? T.anon : s.a === 0 ? T.no_list : T.no_data)); show(); return; }
     var t = table([T.n, T.time, T.after, T.name, T.nick, T.reaction, T.who], [0, 2]);
     rows.forEach(function (v, i) {
       var p = D.people[v[0]] || ["?", "", "", "", 0], ts = s.t + v[1];

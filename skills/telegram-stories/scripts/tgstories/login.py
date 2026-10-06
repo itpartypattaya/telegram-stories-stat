@@ -14,19 +14,17 @@ came, twice). Fallback: phone number + code (`login --code`).
 The cloud password (two-step verification) is typed by the owner in the
 terminal, hidden. A password typed into a chat with an agent would stay in the
 agent's history and reach the model provider, so no mode takes it from a chat.
+Neither does any mode take the login code from a chat: Telegram cancels a code
+that was sent in a Telegram message, and a code relayed through an agent is a
+code someone else could use.
 """
 from __future__ import annotations
 
 import getpass
-import json
-import os
 import re
 import sys
 
 from . import config, db, tg
-
-PENDING = "login-pending.json"
-
 
 def _digits(code: str) -> str:
     return re.sub(r"\D", "", code or "")
@@ -225,50 +223,6 @@ async def qr(cfg: dict) -> int:
             raise SystemExit("not scanned in time — run login --qr again")
         if not await client.is_user_authorized():
             raise SystemExit("login did not complete")
-        return await _finish(client, cfg)
-    finally:
-        await client.disconnect()
-
-
-async def start(cfg: dict, phone: str) -> int:
-    """Two-step mode for agents, step 1: ask Telegram to send a code."""
-    _ensure_api_credentials(False)
-    client = tg.new_client()
-    await client.connect()
-    try:
-        sent = await client.send_code_request(phone)
-        print(describe_sent(sent))
-        path = config.data_dir() / PENDING
-        path.parent.mkdir(parents=True, exist_ok=True)
-        payload = {"phone": phone, "hash": sent.phone_code_hash, "session": client.session.save()}
-        fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            json.dump(payload, fh)
-        print("Next: `stories.py login finish --code <digits>`. "
-              "Type the code with spaces or dashes (1 2 3 4 5) if it has to pass through a chat.")
-        return 0
-    finally:
-        await client.disconnect()
-
-
-async def finish(cfg: dict, code: str) -> int:
-    """Two-step mode, step 2. Refuses to take a cloud password outside a terminal."""
-    from telethon.errors import SessionPasswordNeededError
-    path = config.data_dir() / PENDING
-    if not path.exists():
-        raise SystemExit("no pending login — run `stories.py login start --phone …` first")
-    pending = json.loads(path.read_text(encoding="utf-8"))
-    client = tg.new_client(pending["session"])
-    await client.connect()
-    try:
-        try:
-            await client.sign_in(phone=pending["phone"], code=_digits(code), phone_code_hash=pending["hash"])
-        except SessionPasswordNeededError:
-            if not sys.stdin.isatty():
-                raise SystemExit("two-step verification is on: the cloud password must be typed in a terminal "
-                                 "(`stories.py login`), never in a chat")
-            await client.sign_in(password=getpass.getpass("Cloud password (input hidden): "))
-        path.unlink()
         return await _finish(client, cfg)
     finally:
         await client.disconnect()

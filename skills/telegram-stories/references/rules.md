@@ -53,8 +53,11 @@ stories younger than 30 days are checked every 30 minutes, so a rule on a pinned
 ## Life cycle
 
 `create` → **shadow** (deliveries are recorded with status `shadow`, nothing is sent) → `preview` prints a
-summary, a dry run over views already collected and a digest → `activate N --confirm <digest>` →
-**active**. The digest covers stories, audience, scope, trigger, action and limits; any change resets
+summary, a dry run over the events already collected and a digest → `activate N --confirm <digest>` →
+**active**. The dry run takes the events of the rule's trigger — replies for `reply` (a reply counts even if
+its view was never listed), views with a reaction for `reaction`, views for `view` — and names how many
+people were left out and why (`not_in_audience`, `scope_contacts`, `cooldown`…). "Would send to" passes the
+offline checks; limits, quiet hours and the checks right before a message can still hold some back. The digest covers stories, audience, scope, trigger, action and limits; any change resets
 the rule to shadow. `pause` cancels queued messages; `delete` marks the rule done and keeps history.
 
 `next` binds to the first story posted **after activation** (a story posted while the rule was in shadow
@@ -87,6 +90,13 @@ running service without a restart: it re-reads the file before every round of se
     repeated** — a second copy to a real person is worse than a missing one.
 12. A data folder belongs to one account: logging in with another account, or starting the service with a
     session of another account, is refused — rules and queued messages never move between accounts.
+
+## Replies to automatic messages
+
+`rule show` counts two kinds. **Replied to it**: the person answered that very message (a Telegram reply to
+it). **Wrote within 7 days after it**: any other private message from the person, linked only to the latest
+automatic message they got in the last 7 days — it may be about something else, so do not report it as the
+rule's result. Rows from before 1.5.0 were all counted the loose way and show as "after".
 
 ## Why these limits
 
