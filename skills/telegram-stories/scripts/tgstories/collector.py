@@ -7,6 +7,7 @@ Telegram sends no event when someone views a story, so the collector polls:
   every 30 minutes profile (pinned) stories younger than N days — they keep collecting views
   every 15 minutes channel stories (counts, reactions/reposts; Telegram hides channel viewers)
   after expiry     one last full read of each expired story (finalize_expired)
+  every day        the newest page of the archive: stories posted and expired while the service was down
 """
 from __future__ import annotations
 
@@ -16,7 +17,7 @@ import logging
 import time
 from pathlib import Path
 
-from . import config, db, tg
+from . import config, db, pace, tg
 
 log = logging.getLogger("telegram-stories")
 
@@ -64,13 +65,53 @@ class Collector:
         return ids
 
     async def refresh_active(self, peer=SELF, peer_id: int | None = None) -> list[int]:
-        """Currently active (not expired) stories of a peer."""
+        """Currently active (not expired) stories of a peer; an active one Telegram no longer lists is checked
+        for deletion."""
         peer_id = peer_id or self.owner_id
         res = await self.api.peer_stories(peer)
         self._ingest_users(getattr(res, "users", None))
         ps = getattr(res, "stories", None)
         items = getattr(ps, "stories", None) or []
         ids = self._ingest_stories(items, peer_id)
+        await self.mark_deleted(peer, peer_id, {int(s.id) for s in items})
+        await self.fetch_due_thumbs()
+        return ids
+
+    async def mark_deleted(self, peer, peer_id: int, listed: set) -> list[int]:
+        """Active stories in the database that the list of active stories no longer has. Telegram gives no
+        sign of a deletion: the counters of a deleted story come back as 0 and getStoriesByID skips it without
+        a word. So the id lookup decides: found — kept; not found — deleted=1, out of the polls and the
+        statistics. No answer — nothing is marked."""
+        gone = [sid for sid in self.active_ids(peer_id) if sid not in listed]
+        if not gone:
+            return []
+        try:
+            res = await self.api.by_id(peer, gone)
+        except Exception as exc:  # noqa: BLE001
+            if type(exc).__name__ == "FloodWaitError":
+                raise
+            log.info("deleted-story check skipped: %s", type(exc).__name__)
+            return []
+        found = {int(s.id) for s in getattr(res, "stories", None) or [] if type(s).__name__ != "StoryItemDeleted"}
+        dead = [sid for sid in gone if sid not in found]
+        for sid in dead:
+            self.con.execute("UPDATE stories SET deleted=1 WHERE peer_id=? AND story_id=?", (peer_id, sid))
+            log.info("story %s/%s was deleted", peer_id, sid)
+        return dead
+
+    async def catch_up_archive(self, peer=SELF, peer_id: int | None = None) -> list[int]:
+        """Stories the live poll never saw: posted and expired while the service was down. The newest page of
+        the archive, only the stories not in the database yet (a stored story keeps its own counters). Their
+        viewer lists come with the final read (finalize_expired) while Telegram still gives them; their views
+        are too old to wake a rule (rules.Engine)."""
+        peer_id = peer_id or self.owner_id
+        res = await self.api.archive(peer, offset_id=0, limit=100)
+        self._ingest_users(getattr(res, "users", None))
+        known = {r[0] for r in self.con.execute("SELECT story_id FROM stories WHERE peer_id=?", (peer_id,))}
+        ids = self._ingest_stories([s for s in getattr(res, "stories", None) or [] if int(s.id) not in known],
+                                   peer_id)
+        if ids:
+            log.info("found %d story(ies) the live poll missed: %s", len(ids), ids)
         await self.fetch_due_thumbs()
         return ids
 
@@ -114,9 +155,7 @@ class Collector:
         Telegram keeps the viewer list of an expired story for 24 hours without Premium, for good with it."""
         peer_id = peer_id or self.owner_id
         now = db.now()
-        window = int(self.poll.get("finalize_window_s", 7 * 86400))
-        if peer_id == self.owner_id and db.get_meta(self.con, "owner_premium") == "0":
-            window = min(window, 20 * 3600)
+        window = pace.final_window(self.con, self.cfg, peer_id)
         rows = self.con.execute(
             "SELECT story_id FROM stories WHERE peer_id=? AND deleted=0 AND finalized_at IS NULL AND expire_at<=? "
             "AND expire_at>? ORDER BY expire_at", (peer_id, now, now - window)).fetchall()
@@ -170,6 +209,8 @@ class Collector:
                                    "list_synced, listed_views, listed_reactions FROM stories "
                                    "WHERE peer_id=? AND story_id=?", (peer_id, sid)).fetchone()
             views = getattr(sv, "views_count", None)
+            if not views and old is not None and (old["views"] or 0) > 0:
+                views = None     # a deleted story answers 0: never let that overwrite a real counter
             reactions = getattr(sv, "reactions_count", None)
             forwards = getattr(sv, "forwards_count", None)
             rc_json = None
@@ -179,11 +220,12 @@ class Collector:
                     key = tg.reaction_str(getattr(r, "reaction", None)) or "?"
                     rc[key] = rc.get(key, 0) + int(getattr(r, "count", 0) or 0)
                 rc_json = json.dumps(rc, ensure_ascii=False, sort_keys=True)
-            self.con.execute("UPDATE stories SET views=?, reactions=COALESCE(?, reactions), "
+            self.con.execute("UPDATE stories SET views=COALESCE(?, views), reactions=COALESCE(?, reactions), "
                              "forwards=COALESCE(?, forwards), reactions_json=COALESCE(?, reactions_json), "
                              "last_synced=? WHERE peer_id=? AND story_id=?",
                              (views, reactions, forwards, rc_json, now, peer_id, sid))
-            self._maybe_snapshot(peer_id, sid, old, views, reactions, forwards, now)
+            if views is not None:
+                self._maybe_snapshot(peer_id, sid, old, views, reactions, forwards, now)
             if peer_id != self.owner_id:
                 continue  # channels: Telegram does not list viewers
             # Compare with the counters as they were when the list was last read (listed_*), not with the

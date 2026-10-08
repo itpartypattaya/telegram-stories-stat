@@ -320,6 +320,9 @@ You want to know when each person opens the story. Each person gets a confirmati
 - The service does not send the message if you wrote to the person in the last 24 hours. The service also does
   not send the message if the person got an automatic message in the last 7 days.
 - If the person is not your contact, the rule must permit messages to all people.
+- A rule answers only fresh views. If the service was off and finds a view a day later, nobody gets a message
+  for it: a "thank you" a day after the view looks strange. Views from before you turned the rule on do not
+  count either.
 - Telegram does not show viewers in incognito mode. For these viewers, there is no notification and no message.
 
 ### Other examples
@@ -399,6 +402,7 @@ Telegram does not report new views. For this reason, the service checks the stor
 | each 5 minutes | new stories |
 | each 30 minutes | stories pinned to the profile (for the first 30 days) |
 | when a story leaves the feed | the full viewer list one more, last time |
+| each day | the story archive: stories posted while the service was off |
 
 The service checks this often while at least one autoresponder rule works. **With no rules, the service checks
 each hour** — fewer requests to Telegram. When you turn on a rule, the service goes back to each minute in less

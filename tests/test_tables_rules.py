@@ -135,7 +135,7 @@ class RulesTest(unittest.TestCase):
 
     def test_engine_shadow_and_dedupe(self):
         with TempHome():
-            con, cfg = loaded()
+            con, cfg = loaded({"autoresponder": {"max_event_age_h": 0}})    # fixed dates
             rid = self._rule(con, cfg, "shadow", self.spec())
             eng = rules.Engine(con, cfg)
             row = {"peer_id": 1, "story_id": 100, "user_id": 10, "viewed_at": T0 + 600}
@@ -146,7 +146,7 @@ class RulesTest(unittest.TestCase):
 
     def test_engine_queues_for_active_and_skips_strangers(self):
         with TempHome():
-            con, cfg = loaded()
+            con, cfg = loaded({"autoresponder": {"max_event_age_h": 0}})    # fixed dates
             rid = self._rule(con, cfg, "active", self.spec())
             eng = rules.Engine(con, cfg)
             eng.on_event("view", {"peer_id": 1, "story_id": 100, "user_id": 10, "viewed_at": T0})

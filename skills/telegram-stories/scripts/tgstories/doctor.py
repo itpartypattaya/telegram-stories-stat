@@ -70,7 +70,13 @@ def run(cfg: dict, online: bool = True) -> int:
     bad += 0 if session else 1
     try:
         import telethon
-        out.append(_line(True, "telethon", telethon.__version__))
+        from telethon.tl.alltlobjects import LAYER
+
+        from .tg import MIN_LAYER
+        fresh = LAYER >= MIN_LAYER
+        out.append(_line(True if fresh else None, "telethon", f"{telethon.__version__} (layer {LAYER})" + (
+            "" if fresh else f" — older than what Telegram sends (layer {MIN_LAYER}): the service can lose the "
+                             "connection; update: pip install -U telethon")))
     except ImportError:
         py = db.get_meta(con, "python")
         out.append(_line(None, "telethon", f"not importable here; service python: {py or 'unknown'}"))

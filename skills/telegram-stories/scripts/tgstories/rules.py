@@ -295,8 +295,19 @@ class Engine:
             return 0
         if trigger == "reaction" and not row.get("reaction"):
             return 0
+        # A view is found when the list is read, not when it happens: after a downtime the final read or a
+        # table can bring up views of yesterday. A message a day after the view reads as surveillance —
+        # an event older than max_event_age_h when it is found wakes no rule.
+        at = int(row.get("viewed_at") or 0)
+        max_age = float(self.cfg.get("autoresponder", {}).get("max_event_age_h", 24) or 0) * 3600
+        if max_age and at and db.now() - at > max_age:
+            return 0
         made = 0
         for rule in self.rules():
+            # an active rule answers what happened after it was activated, not views of before that were
+            # read only now (at the hourly pace up to an hour of them)
+            if rule["status"] == "active" and rule["activated_at"] and at and at < rule["activated_at"]:
+                continue
             spec = json.loads(rule["spec"])
             if spec.get("valid_until") and \
                     datetime.now(config.get_tz(self.cfg)).strftime("%Y-%m-%d") > str(spec["valid_until"])[:10]:

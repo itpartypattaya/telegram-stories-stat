@@ -74,21 +74,25 @@ running service without a restart: it re-reads the file before every round of se
    owner or hid the owner's stories, **people who charge Stars for messages** (Telegram reports this in
    their profile — skipped before any attempt; the service never pays).
 4. Scope filter (contacts by default). `dialog` is checked against the real chat before sending.
-5. One message per person per rule, ever; no automatic message to a person more often than
+5. Only fresh events: a view or reply found more than `max_event_age_h` (default 24) hours after it happened
+   wakes no rule (after a downtime the final read brings up views of yesterday — a message a day later reads
+   as surveillance), and an active rule ignores views from before its activation. `0` switches the age
+   limit off.
+6. One message per person per rule, ever; no automatic message to a person more often than
    `cooldown_days` (default 7) across all rules; nothing if the owner wrote to them in the last 24 h.
-6. Caps per account: 40/day for `contacts` and `dialog`, 10/day for `all`, 15/hour overall.
-7. Quiet hours (default 22:00–09:00): sending waits until the morning.
-8. Telegram anti-spam: `PEER_FLOOD` stops everything and alerts the owner; a flood wait over 5 minutes
+7. Caps per account: 40/day for `contacts` and `dialog`, 10/day for `all`, 15/hour overall.
+8. Quiet hours (default 22:00–09:00): sending waits until the morning.
+9. Telegram anti-spam: `PEER_FLOOD` stops everything and alerts the owner; a flood wait over 5 minutes
    pauses sending for that long; three failures in a row pause the rule.
-9. If a recipient hides the owner's stories or blocks the owner after an automatic message, the rule
-   that wrote to them pauses and the owner is told.
-10. Right before each message the service fetches the recipient's current profile (contact status, Stars
+10. If a recipient hides the owner's stories or blocks the owner after an automatic message, the rule
+    that wrote to them pauses and the owner is told.
+11. Right before each message the service fetches the recipient's current profile (contact status, Stars
     price) and claims the message in one database transaction that re-checks the kill switch, the rule's
     status and its digest. `stories.py stop` therefore stops everything except, at most, the one message
     already handed to Telegram.
-11. A send whose outcome is unknown (timeout, dropped connection, crash) is recorded as failed and **never
+12. A send whose outcome is unknown (timeout, dropped connection, crash) is recorded as failed and **never
     repeated** — a second copy to a real person is worse than a missing one.
-12. A data folder belongs to one account: logging in with another account, or starting the service with a
+13. A data folder belongs to one account: logging in with another account, or starting the service with a
     session of another account, is refused — rules and queued messages never move between accounts.
 
 ## Replies to automatic messages

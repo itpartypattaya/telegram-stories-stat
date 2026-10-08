@@ -34,8 +34,10 @@ DEFAULTS: dict = {
         "channel_stats_s": 3600,
         "snapshot_s": 600,          # counter snapshots during the first 48 h (growth curve)
         "reactions_refresh_s": 600, # full re-read of a list when only reactions changed
+        "full_refresh_s": 1800,     # full re-read of an active story's list anyway (❤ → 🔥 keeps the count)
         "chat_segments_s": 900,     # member lists of chat segments ("only the members of this group")
         "finalize_window_s": 604800,  # read an expired story once more within this time (24 h without Premium)
+        "archive_s": 86400,         # look in the archive for stories posted and expired while the service was down
         "page_pause_s": 0.7,
     },
     "backfill": {"pause_s": 2.0, "thumbs": True},
@@ -57,6 +59,7 @@ DEFAULTS: dict = {
         "quiet_hours": ["22:00", "09:00"],
         "cooldown_days": 7,
         "skip_if_owner_wrote_hours": 24,
+        "max_event_age_h": 24,      # a view or reply found later than this (after a downtime) wakes no rule; 0 = off
         "never_message": [],        # user ids or @usernames that never get an automatic message
     },
     "session_env": "STORIES_SESSION_STRING",

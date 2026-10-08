@@ -89,6 +89,11 @@ async def send_due(con, cfg: dict, peer_id: int, alert, refresh=None) -> int:
     for sid in due_pulses(con, cfg, peer_id):
         if refresh:
             await refresh([sid])
+        if pulse(con, cfg, peer_id, sid) is None:
+            # still no viewer list to count after the re-read: no pulse rather than "no data" in the topic;
+            # marked as handled, so it is not tried (and re-read from Telegram) every minute for 6 hours
+            con.execute("UPDATE stories SET pulse_sent_at=? WHERE peer_id=? AND story_id=?", (db.now(), peer_id, sid))
+            continue
         if await alert(pulse_text(con, cfg, story_ref=str(sid), peer_id=peer_id)):
             con.execute("UPDATE stories SET pulse_sent_at=? WHERE peer_id=? AND story_id=?", (db.now(), peer_id, sid))
             sent += 1

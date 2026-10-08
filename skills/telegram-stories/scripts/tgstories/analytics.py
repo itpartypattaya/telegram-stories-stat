@@ -136,8 +136,9 @@ def story_at(con, peer_id: int, story_id: int, hours: float) -> int | None:
 
 
 def baseline_at(con, peer_id: int, before_ts: int, hours: float, n: int = 20) -> float | None:
+    # only lists that cover most of the counter: a partial old list says nothing about its first hours
     prev = con.execute("SELECT story_id FROM stories WHERE peer_id=? AND deleted=0 AND posted_at<? "
-                       "AND list_available=1 AND posted_at<? ORDER BY posted_at DESC LIMIT ?",
+                       f"AND list_available=1 AND {FULL_LIST} AND posted_at<? ORDER BY posted_at DESC LIMIT ?",
                        (peer_id, before_ts, db.now() - int(hours * HOUR), n)).fetchall()
     return median([story_at(con, peer_id, p[0], hours) for p in prev])
 

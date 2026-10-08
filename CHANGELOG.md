@@ -4,6 +4,33 @@
 
 All notable changes of the skill. Versions follow `plugin.json` and `SKILL.md`. Newest first.
 
+## 1.5.1 — 2026-10-08
+
+Findings of an audit of 1.5.0 on the live service.
+
+### Fixed
+
+- **The service no longer drops the connection on new Telegram objects.** On 06.10 Telegram sent objects of
+  layer 229; Telethon 1.44 could not read them, the service lost the connection twice and restarted. The skill
+  now needs Telethon 1.45+: the installer upgrades an older one, `doctor` warns about it.
+- **Personal data out of the logs.** On such an error Telethon writes the raw bytes of the answer into the
+  error text — names, usernames and phone numbers of contacts. The service and the CLI cut them out of every
+  log line and say what the error means.
+- **A deleted story is recognized.** Telegram answers the counters of a deleted story with 0 and skips it
+  without a word. Before, the 0 overwrote the real counter and the story stayed "active" with 0 views in
+  medians and comparisons. Now an active story missing from Telegram's list is looked up by id; not found — it
+  is marked deleted and left out. A counter of 0 never overwrites a real one.
+- **A rule answers fresh views only.** A view found more than 24 hours after it happened (the final read after
+  a downtime, a table of an older story) wakes no rule, and an active rule ignores views from before its
+  activation. Before, a message could come a day after the view. `autoresponder.max_event_age_h`, 0 = off.
+- **Stories posted while the service was down are found.** Once a day the service looks at the newest page of
+  the archive; a story it never saw gets its final read while Telegram keeps the list (`poll.archive_s`).
+- The comparison of a young story and the pulse use only earlier stories with a full viewer list (80%+ of the
+  counter), like the best hours.
+- "Final read pending" uses the real window: 20 hours without Premium, not 7 days.
+- A pulse without a viewer list is not sent as "No data yet" and is not re-read every minute for 6 hours.
+- `poll.full_refresh_s` (the half-hourly full re-read of an active story) is in the defaults and documented.
+
 ## 1.5.0 — 2026-10-06
 
 Findings of an independent review of 1.4.0.

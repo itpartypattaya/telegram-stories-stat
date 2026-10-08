@@ -294,6 +294,8 @@ def main(argv=None) -> int:
             stream.reconfigure(errors="replace")  # emoji in tables must not crash a legacy console
         except (AttributeError, ValueError):
             pass
+    from tgstories import tg
+    tg.redact_logs()
     args = build_parser().parse_args(argv)
     if args.cmd in TELEGRAM_COMMANDS or (args.cmd == "doctor" and not args.offline) \
             or (args.cmd == "rule" and args.action in ("activate",)) \

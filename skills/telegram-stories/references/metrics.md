@@ -1,6 +1,9 @@
 # Metrics — exact definitions
 
-All times are stored in UTC and shown in the config `timezone`. "Listed viewers" are the rows Telegram
+All times are stored in UTC and shown in the config `timezone`. A story deleted in Telegram is marked
+`deleted` and is left out of every list of stories, median and comparison; its viewer rows stay, so the
+people who viewed it keep that activity.
+ "Listed viewers" are the rows Telegram
 returned in the viewer list; "views" is Telegram's own counter (it also counts incognito viewers and
 deleted accounts, so it can be a little higher).
 
@@ -15,7 +18,7 @@ deleted accounts, so it can be a little higher).
 | 1h / 6h / 24h / 48h | Listed viewers whose first view came within N hours of posting. |
 | Time | First time Telegram reported this viewer (later re-views are kept in `view_events`). |
 | After | Time between posting and that first view. |
-| vs usual | Finished story: views ÷ median views of the previous 20 stories, as ±%. A story younger than 48 h (marked ⏳) is still collecting views, so it is compared fairly: listed viewers so far ÷ median of the previous 20 stories at the same age. |
+| vs usual | Finished story: views ÷ median views of the previous 20 stories, as ±%. A story younger than 48 h (marked ⏳) is still collecting views, so it is compared fairly: listed viewers so far ÷ median of the previous 20 stories at the same age (only stories whose list covers 80%+ of the counter — a partial old list says nothing about its first hours; the pulse uses the same baseline). |
 | new viewers | Listed viewers with no earlier view in the collected history (not "first ever": the history starts with the first story that has a viewer list, and the summary names that date). |
 | 👥 / 📇 / · / ⭐ | Mutual contact / contact / not a contact / on the owner's Close Friends list. |
 | quality line | `data as of` — when this story was last read from Telegram; `N of M in the list` — listed viewers against the counter (the gap is incognito viewers, deleted accounts, or a list Telegram stopped giving — not a measured "hidden audience"); the final read — the full list read once more after the story expired (`stories.finalized_at`), pending, or never made (older than the window). |

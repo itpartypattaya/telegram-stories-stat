@@ -14,8 +14,10 @@ T0 = 1_760_000_000          # 2025-10-09 08:53:20 UTC
 
 
 def setup(home, locale="en"):
+    # the scenarios replay fixed dates: the age of an event (max_event_age_h) has its own tests
     cfg = {"timezone": "UTC", "locale": locale,
-           "autoresponder": {"enabled": True, "quiet_hours": [], "delay_s": [30, 30], "skip_if_owner_wrote_hours": 0}}
+           "autoresponder": {"enabled": True, "quiet_hours": [], "delay_s": [30, 30], "skip_if_owner_wrote_hours": 0,
+                             "max_event_age_h": 0}}
     (home / "telegram-stories.json").write_text(json.dumps(cfg), encoding="utf-8")
     cfg = config.load_config()
     con = db.connect()

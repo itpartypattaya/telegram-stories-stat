@@ -1,10 +1,10 @@
 ---
 name: telegram-stories
 description: "Telegram stories: who viewed, stats tables, auto-replies."
-version: 1.5.0
+version: 1.5.1
 author: "Anton Vaskov (itpartypattaya), https://t.me/passone"
 license: MIT
-compatibility: Hermes Agent >= 0.21 (written against 0.21.5); Python 3.10+; Telethon 1.40+ (tested 1.44)
+compatibility: Hermes Agent >= 0.21 (written against 0.21.5); Python 3.10+; Telethon 1.45+ (tested 1.45)
 platforms: [linux]
 allowed-tools: terminal read_file
 tags: [telegram, stories, analytics, telethon, autoresponder]
@@ -128,10 +128,16 @@ command.
 - A story id is per account; `last` and `-N` are relative to the newest story.
 - `rule activate` fails if the digest does not match — that is the point: re-preview, re-ask.
 - The service is the only writer of automatic messages; do not send them with other tools.
+- A rule answers fresh events only: a view found more than `autoresponder.max_event_age_h` (24) hours after it
+  happened — after the service was down — or a view from before the rule was activated sends nothing. Do not
+  promise a message to people who viewed earlier.
+- A story deleted in Telegram is marked `deleted` and left out of tables and comparisons; its viewers stay in
+  the people statistics (they did view it).
 
 ## Verification
 
-- `stories.py doctor` → `ok` for database, session, service, last poll (under ~10 minutes with an active
+- `stories.py doctor` → `ok` for telethon (layer 229 or newer: an older one loses the connection on what
+  Telegram sends), database, session, service, last poll (under ~10 minutes with an active
   rule, under ~70 without: the service then checks hourly; `status` names the pace).
 - `stories.py table story last` lists viewers; the header's 👁 is Telegram's view counter, and the quality
   line under it says how many of them are in the list.

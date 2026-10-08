@@ -63,8 +63,10 @@ class FakeApi:
 
 
 def setup(home):
+    # fixed dates: the age of an event (max_event_age_h) has its own tests
     cfg = {"timezone": "UTC", "autoresponder": {"enabled": True, "quiet_hours": [], "delay_s": [30, 30],
-                                                "skip_if_owner_wrote_hours": 0, "default_scope": "dialog"}}
+                                                "skip_if_owner_wrote_hours": 0, "default_scope": "dialog",
+                                                "max_event_age_h": 0}}
     (home / "telegram-stories.json").write_text(json.dumps(cfg), encoding="utf-8")
     cfg = config.load_config()
     con = db.connect()

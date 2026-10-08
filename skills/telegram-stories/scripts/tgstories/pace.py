@@ -49,6 +49,15 @@ def stale(con, now: int | None = None) -> bool:
     return (now or db.now()) - last > FRESH_S
 
 
+def final_window(con, cfg: dict, peer_id: int | None = None) -> int:
+    """How long after the expiry the last full read of a story is still tried. Without Premium Telegram keeps
+    the viewer list of your expired story for 24 hours: 20 then, to be in time."""
+    window = int((cfg.get("poll") or {}).get("finalize_window_s", 7 * 86400))
+    if (peer_id is None or peer_id == db.owner_id(con)) and db.get_meta(con, "owner_premium") == "0":
+        window = min(window, 20 * 3600)
+    return window
+
+
 def channel_ref(con, ref: str | None) -> tuple[int | None, str | None]:
     """--peer of a table → (peer id, what to ask Telegram for). A channel without a username cannot be asked
     for by our stored id; such a table shows the stored data."""

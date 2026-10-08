@@ -43,15 +43,17 @@ def unit_path() -> Path:
 TELETHON_PROBE = (
     "import inspect, telethon\n"
     "from telethon.tl import types\n"
+    "from telethon.tl.alltlobjects import LAYER\n"
     "from telethon.tl.functions import stories\n"
     "ok = hasattr(stories, 'GetStoryViewsListRequest') and 'send_paid_messages_stars' in "
-    "inspect.signature(types.User.__init__).parameters\n"
+    "inspect.signature(types.User.__init__).parameters and LAYER >= 229\n"
     "print(telethon.__version__, 'ok' if ok else 'old')\n")
 
 
 def telethon_version(python: str) -> str | None:
     """Version string if Telethon is importable AND new enough: it must know story viewer lists and the
-    paid-messages field of a user (layer ~200+), or the paid-message guard would silently see nothing."""
+    paid-messages field of a user, or the paid-message guard would silently see nothing; and it must read the
+    objects Telegram sends now (layer 229: an older one lost the connection on them — tg.MIN_LAYER)."""
     try:
         out = subprocess.run([python, "-c", TELETHON_PROBE], capture_output=True, text=True, timeout=60)
         if out.returncode != 0:
@@ -67,7 +69,7 @@ def systemd_quote(value: str) -> str:
     return '"' + str(value).replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
-DEP_TELETHON = "telethon>=1.40,<2"
+DEP_TELETHON = "telethon>=1.45,<2"
 DEP_QRCODE = "qrcode>=7,<9"
 
 

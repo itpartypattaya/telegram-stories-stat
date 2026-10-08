@@ -7,6 +7,7 @@ Loops (intervals from the config `poll` section):
   new stories  every 5 minutes
   profile      every 30 minutes: pinned stories younger than N days
   channels     every 15 minutes (counts, reactions, reposts)
+  archive      every day: stories posted and expired while the service was down
   sender       every 15 seconds: due automatic messages (all guards re-checked)
   reports      every minute: pulse after N hours, weekly/monthly digest
 Plus a handler for incoming private messages: replies to stories and replies to
@@ -95,6 +96,7 @@ async def main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s", stream=sys.stdout)
     for noisy in ("telethon", "asyncio"):
         logging.getLogger(noisy).setLevel(logging.WARNING)
+    tg.redact_logs()
     _lockfile = _lock()  # noqa: F841 — held for the process lifetime
     cfg = config.load_config()
     con = db.connect()
@@ -167,6 +169,9 @@ async def main() -> int:
     async def new_stories():
         await col.refresh_active()
 
+    async def archive():
+        await col.catch_up_archive()      # their lists come with the final read; their views wake no rule
+
     async def pinned():
         await col.refresh_pinned()     # new profile stories join the poll, every page
         ids = col.pinned_recent_ids()
@@ -220,6 +225,7 @@ async def main() -> int:
         asyncio.create_task(every(at(poll.get("counters_s", 60)), counters, "counters", stop)),
         asyncio.create_task(every(at(poll.get("new_stories_s", 300)), new_stories, "new_stories", stop)),
         asyncio.create_task(every(at(poll.get("pinned_s", 1800)), pinned, "pinned", stop)),
+        asyncio.create_task(every(poll.get("archive_s", 86400), archive, "archive", stop)),
         asyncio.create_task(every(15, send, "sender", stop)),
         asyncio.create_task(every(at(poll.get("chat_segments_s", 900)), chat_segments, "chat_segments", stop)),
         asyncio.create_task(every(60, report, "reports", stop)),

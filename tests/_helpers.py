@@ -121,6 +121,11 @@ class FakeApi:
     async def pinned(self, peer, offset_id=0, limit=100):
         return SimpleNamespace(stories=[], users=[])
 
+    async def by_id(self, peer, ids):
+        # like Telegram: an id it does not have is skipped without a word
+        self.calls.append(("by_id", tuple(ids)))
+        return SimpleNamespace(stories=[self.stories[i][0] for i in ids if i in self.stories], users=self.users)
+
 
 async def no_sleep(_):
     return None

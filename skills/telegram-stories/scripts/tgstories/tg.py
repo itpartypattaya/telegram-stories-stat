@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from datetime import datetime
 
 from . import __version__, config
@@ -16,6 +17,42 @@ from . import __version__, config
 log = logging.getLogger("telegram-stories")
 
 DEVICE_MODEL = "Hermes Stories"
+# Telegram sent objects of layer 229 to this skill on 06.10.2026; Telethon 1.44 (layer 227) could not read them,
+# lost the connection and the service restarted. Telethon 1.45 has them.
+MIN_LAYER = 229
+
+_RAW_BYTES = re.compile(r"Remaining bytes: .*")
+
+
+def _cut_raw(text: str) -> str:
+    text = _RAW_BYTES.sub("Remaining bytes: <cut: they can hold names and phone numbers>", text)
+    if "Could not find a matching Constructor ID" in text and "update Telethon" not in text:
+        text += " — Telethon is older than what Telegram sends: update Telethon (pip install -U telethon)"
+    return text
+
+
+class RedactRawBytes(logging.Filter):
+    """Telethon puts the raw bytes of an answer it cannot read into the error text — names, usernames and
+    phone numbers of contacts among them — and that text lands in the service log, or in an agent's context
+    through the CLI. They are cut out, and the error says what it means."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        msg = record.getMessage()
+        if "Remaining bytes" in msg:
+            record.msg, record.args = _cut_raw(msg), ()
+        if record.exc_info and not record.exc_text:
+            text = logging.Formatter().formatException(record.exc_info)
+            if "Remaining bytes" in text:
+                record.exc_text = _cut_raw(text)
+        return True
+
+
+def redact_logs() -> None:
+    """On every handler of the root logger and on Python's last-resort one: a filter on a logger would miss
+    what Telethon's own loggers propagate."""
+    for h in [*logging.getLogger().handlers, logging.lastResort]:
+        if h is not None and not any(isinstance(f, RedactRawBytes) for f in h.filters):
+            h.addFilter(RedactRawBytes())
 
 
 def _ts(dt) -> int | None:
