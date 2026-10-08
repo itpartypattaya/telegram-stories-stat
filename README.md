@@ -350,7 +350,8 @@ You want to know when each person opens the story. Each person gets a confirmati
    replied to the story; for a "reaction" rule — the people who reacted. The preview also tells how many people
    were left out, and why.
 4. Answer "yes". The rule starts to work exactly as the preview shows. After each change, the rule goes back
-   to test mode.
+   to test mode. A rule usually answers new views only. To write also to the people who already viewed the
+   story, say so: *"…and to those who have already seen it"*.
 5. To see the result, tell the agent: *"Show rule 3"*. You see who got the message, who did not get it and
    why, and who answered. There are two kinds of answers:
    - **replied to it** — the person used "Reply" on your message. This is the real result of the rule;
@@ -368,6 +369,10 @@ Rules cannot turn off this protection. You can change the numbers in the config.
 - The service does not write to bots, deleted accounts and people who hid your stories or blocked you.
 - The service does not write to people with paid messages (Stars). The service never pays.
 - The service does not write to people in the `never_message` list.
+- People in the `only_when_named` list (your family, for example) get a message only from a rule that names
+  them. A rule for all viewers or for a segment does not write to them.
+- A rule that names a person (*"write to @anna…"*) is your own choice: "you wrote to them today" and "one
+  automatic message in 7 days" do not stop it. The limits and quiet hours still do.
 - For a group segment, the service checks the membership in the group right before each message.
 - One person gets one message for each rule. One person gets not more than one automatic message in 7 days.
 - Limits per day: 40 messages to contacts, 40 to people who wrote to you, 10 to all other people. Limit per
@@ -510,7 +515,7 @@ The installer makes the file `~/.hermes/telegram-stories.json` from
 | `channels` | your channels with stories to count |
 | `notify` | where notifications go: `auto` (the agent's bot), `saved` (Saved Messages), `none` |
 | `digest` | the day and the time of the weekly summary |
-| `autoresponder` | on/off, limits, quiet hours, delay, the `never_message` list |
+| `autoresponder` | on/off, limits, quiet hours, delay, the `never_message` and `only_when_named` lists |
 
 The service applies changes in the `autoresponder` section without a restart.
 

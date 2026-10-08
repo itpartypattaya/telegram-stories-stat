@@ -193,7 +193,9 @@ class Sender:
                     if member is not True:
                         self._mark(d, "skipped", "not_in_chat" if member is False else "chat_unverified")
                         continue
-                if await self._owner_wrote_recently(peer):
+                # a person the rule names was chosen by the owner himself: talking to them today is no reason
+                # to hold the message back
+                if not rules.named(self.con, spec, d["user_id"]) and await self._owner_wrote_recently(peer):
                     self._mark(d, "skipped", "owner_wrote_recently")
                     continue
                 # a fresh profile right before writing: contact status and the Stars price can change, and a

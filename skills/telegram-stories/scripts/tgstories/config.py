@@ -61,6 +61,7 @@ DEFAULTS: dict = {
         "skip_if_owner_wrote_hours": 24,
         "max_event_age_h": 24,      # a view or reply found later than this (after a downtime) wakes no rule; 0 = off
         "never_message": [],        # user ids or @usernames that never get an automatic message
+        "only_when_named": [],      # ids or @usernames written to only by a rule that names them (family…)
     },
     "session_env": "STORIES_SESSION_STRING",
 }

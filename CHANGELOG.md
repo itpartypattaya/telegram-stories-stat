@@ -4,6 +4,24 @@
 
 All notable changes of the skill. Versions follow `plugin.json` and `SKILL.md`. Newest first.
 
+## 1.6.0 — 2026-10-08
+
+### Added
+
+- **Write to people who already viewed.** `"include_seen": true` in a rule with `stories: {mode: ids}`: on
+  activation, the people who already viewed (reacted, replied to) those stories get the message too — queued
+  at once and sent through every guard. Before, a rule answered only new events. The preview says how many
+  people are left out without it.
+- **`autoresponder.only_when_named`** — people (family, partners) who get a message only from a rule that
+  names them in `audience.users`. A rule for everyone or a segment skips them. `never_message` stays an
+  absolute ban.
+
+### Changed
+
+- **A rule that names its recipients is the owner's own choice.** The 7-day cooldown and "the owner wrote to
+  them in the last 24 hours" no longer hold its message back (before, a message to someone you talk to every
+  day never went). Limits, quiet hours, the kill switch and the yes to the preview still apply.
+
 ## 1.5.1 — 2026-10-08
 
 Findings of an audit of 1.5.0 on the live service.

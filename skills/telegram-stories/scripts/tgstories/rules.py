@@ -8,8 +8,10 @@ is printed by `rule preview` and covers everything that decides who gets what)
 
 Guards that no rule can switch off: autoresponder.enabled in the config, the
 kill switch, scope (contacts by default), never_message, bots and deleted
-accounts, people who charge Stars for messages, cooldown between automatic
-messages, daily and hourly caps. Details: references/rules.md.
+accounts, people who charge Stars for messages, daily and hourly caps. People
+the rule names by @username or id (audience.users) were chosen by the owner
+himself: only_when_named lets them in, and the cooldown and "the owner wrote to
+them today" do not hold such a message back. Details: references/rules.md.
 """
 from __future__ import annotations
 
@@ -88,6 +90,11 @@ def normalize(spec: dict, cfg: dict) -> dict:
         a.pop("text", None)
     if a["type"] == "segment" and not a.get("segment"):
         raise SystemExit("action.segment is required")
+    if spec.get("include_seen"):
+        if out["stories"]["mode"] != "ids":
+            raise SystemExit("include_seen needs stories.mode = ids: it writes to the people who already viewed the "
+                             "stories named by id")
+        out["include_seen"] = True     # only when set: the digest of every older rule stays the same
     return out
 
 
@@ -192,10 +199,17 @@ def user_by_username(con, ref: str) -> int | None:
     return None
 
 
-def _never(cfg, con) -> set:
-    """never_message → ids. An @name nobody in the database has yet resolves later, when that person shows
-    up — precheck runs it again for every message, so the ban is never skipped once they are known."""
-    refs = cfg.get("autoresponder", {}).get("never_message") or []
+def named(con, spec: dict, user_id: int) -> bool:
+    """The rule names this person (audience.users): the owner chose them himself, by name."""
+    a = spec.get("audience") or {}
+    return a.get("mode") == "users" and user_id in _resolve_users(con, a.get("users") or [], strict=False)
+
+
+def _never(cfg, con, key: str = "never_message") -> set:
+    """never_message / only_when_named → ids. An @name nobody in the database has yet resolves later, when
+    that person shows up — precheck runs it again for every message, so the list is never skipped once they
+    are known."""
+    refs = cfg.get("autoresponder", {}).get(key) or []
     out = set()
     for r in refs:
         r = str(r).strip()
@@ -222,6 +236,9 @@ def precheck(con, cfg, spec, user_id: int) -> str | None:
         return None if p is not None else "unknown_user"
     if user_id in _never(cfg, con):
         return "never_message"
+    by_name = named(con, spec, user_id)
+    if not by_name and user_id in _never(cfg, con, "only_when_named"):
+        return "only_when_named"     # family and the like: only a rule that names them writes to them
     if p is None:
         return "unknown_user"
     if p["bot"]:
@@ -239,7 +256,7 @@ def precheck(con, cfg, spec, user_id: int) -> str | None:
     cd = int(cfg.get("autoresponder", {}).get("cooldown_days", 7)) * 86400
     recent = con.execute("SELECT 1 FROM deliveries WHERE user_id=? AND status='sent' AND sent_at>? LIMIT 1",
                          (user_id, db.now() - cd)).fetchone()
-    if recent:
+    if recent and not by_name:       # a message the owner addressed to this person himself is not spam
         return "cooldown"
     return None
 
@@ -489,7 +506,9 @@ def _summary(con, cfg, rule) -> str:
     scope = {"contacts": "your contacts only", "dialog": "people who have written to you before",
              "all": "anyone (strangers included)"}[spec["scope"]]
     lines = [f"Rule {rule['id']} — {spec['name']} [{rule['status']}]",
-             f"  when: {spec['trigger']} on {stories}",
+             f"  when: {spec['trigger']} on {stories}"
+             + (" — also to the people who already did it (sent right after activation)"
+                if spec.get("include_seen") else ""),
              f"  who:  {audience}; limited to {scope}"]
     if ac["type"] == "dm":
         for i, v in enumerate(ac["variants"]):
@@ -548,7 +567,7 @@ def simulate(con, cfg, rule) -> dict:
     else:
         ids = [r[0] for r in con.execute("SELECT story_id FROM stories WHERE peer_id=? ORDER BY posted_at DESC "
                                          "LIMIT 5", (owner,))]
-    match, reasons = [], {}
+    match, targets, reasons = [], [], {}
     seen, outside, events = set(), set(), 0
     for sid in ids:
         if not _story_matches(con, rule, spec, owner, sid):
@@ -566,11 +585,29 @@ def simulate(con, cfg, rule) -> dict:
                 reasons[r] = reasons.get(r, 0) + 1
             else:
                 match.append(v["user_id"])
+                targets.append((v["user_id"], sid))
     outside -= seen
     if outside:
         reasons["not_in_audience"] = len(outside)
     return {"stories": ids, "events": events, "event": EVENT_WORD.get(spec["trigger"], "views"),
-            "would_send": match, "excluded": reasons}
+            "would_send": match, "targets": targets, "excluded": reasons}
+
+
+def queue_seen(con, cfg, rule) -> int:
+    """include_seen: at the activation, the people who already viewed (reacted, replied to) the stories named
+    by id are queued as if their event came now. Every guard of the sender still holds: limits, quiet hours,
+    the kill switch, a fresh profile right before the message. Returns how many were queued."""
+    spec = json.loads(rule["spec"])
+    if not spec.get("include_seen"):
+        return 0
+    owner, n = db.owner_id(con), 0
+    variants = spec["action"].get("variants") or [""]
+    for uid, sid in simulate(con, cfg, rule)["targets"]:
+        n += con.execute(
+            "INSERT OR IGNORE INTO deliveries(rule_id,user_id,peer_id,story_id,status,variant,created_at,due_at,"
+            "rule_digest) VALUES(?,?,?,?,'queued',?,?,?,?)",
+            (rule["id"], uid, owner, sid, uid % len(variants), db.now(), due_time(cfg, spec), rule["digest"])).rowcount
+    return n
 
 
 def _drop_queue(con, rule_id: int, reason: str, also_shadow: bool = False) -> int:
@@ -632,6 +669,11 @@ def cli(cfg, args) -> int:
                   f"would send to {len(sim['would_send'])}"
                   + (", excluded: " + ", ".join(f"{k} {v}" for k, v in sim["excluded"].items())
                      if sim["excluded"] else ""))
+        spec = json.loads(rule["spec"])
+        if spec.get("include_seen") and sim["would_send"]:
+            print(f"  on activation: {len(sim['would_send'])} message(s) to the people who already did it")
+        elif sim["would_send"] and spec["action"]["type"] == "dm" and spec["stories"]["mode"] == "ids":
+            print("  NOTE: people who already did it get nothing — add \"include_seen\": true to write to them too")
         if not cfg.get("autoresponder", {}).get("enabled"):
             print("  NOTE: autoresponder.enabled is false in the config — even an active rule sends nothing.")
         print(f"To activate exactly this: `rule activate {rule['id']} --confirm {rule['digest']}`")
@@ -650,7 +692,9 @@ def cli(cfg, args) -> int:
         if cur.rowcount != 1:
             raise SystemExit("the rule changed or is not in shadow/paused — run `rule preview` again")
         _drop_queue(con, args.id, "rule re-activated", also_shadow=True)
-        print(f"Rule {args.id} is ACTIVE. Stop everything at once: `stories.py stop`.")
+        seen = queue_seen(con, cfg, rule)
+        print(f"Rule {args.id} is ACTIVE." + (f" {seen} message(s) queued for the people who already did it."
+                                              if seen else "") + " Stop everything at once: `stories.py stop`.")
         return 0
     if a == "shadow":
         con.execute("UPDATE rules SET status='shadow', activated_at=NULL, bound_story_id=NULL WHERE id=?", (args.id,))

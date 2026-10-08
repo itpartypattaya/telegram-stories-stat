@@ -12,7 +12,8 @@
   "action":   {"type": "dm", "text": "Hi {first_name}! Thanks for watching 🙌"},
   "limits":   {"per_day": 20, "total": 100},
   "delay_s":  [120, 360],
-  "valid_until": "2026-12-31"
+  "valid_until": "2026-12-31",
+  "include_seen": false
 }
 ```
 
@@ -26,6 +27,7 @@
 | `limits` | `per_day`, `total` for this rule |
 | `delay_s` | random delay range before sending (minimum 30 s); default from the config |
 | `valid_until` | `YYYY-MM-DD`; the rule stops matching after that day |
+| `include_seen` | `true` (needs `stories.mode: ids`): on activation, also the people who already viewed / reacted / replied get the message — queued right away and sent through every guard below. Without it only events after the activation count |
 
 `{first_name}` in a text is replaced with the recipient's first name. Messages go out as plain text: a link
 is pasted as is (`https://…`), Markdown is not parsed, files and buttons cannot be attached.
@@ -39,6 +41,7 @@ by username the first time they view (the preview says so). A numeric Telegram i
 |---|---|
 | Lead magnet for whoever reaches the last story of a series | owner puts a marker such as `#guide` into the **last** story's caption; `stories: {mode: tag, tag: "#guide"}`, `trigger: view`, `action: dm` with the link. Activate **before** posting: people who viewed earlier are not messaged. Viewers who are not contacts need `scope: all` (10/day by default) |
 | "Reply to this story and I'll send the guide" | same `tag`, `trigger: reply`, `scope: dialog` — the person has just written to the owner, so this is not a cold message; 40/day by default. Any reply counts: the reply text is not read |
+| Write to @someone who has already viewed story 224 | `stories: {mode: ids, ids: [224]}`, `audience: {mode: users, users: ["@someone"]}`, `action: dm`, `"include_seen": true` |
 | Tell me when @someone opens a story | `audience: {mode: users, users: ["@someone"]}`, `action: {type: notify}`, `delay_s: [30, 60]`. Works with the autoresponder switched off: it writes to nobody but the owner. The notification names the moment of the view |
 | Confirm to @someone in private that they saw a public notice | as above with `action: dm`, `scope: all` (or `contacts` if they are) — pair it with the notify rule to know as well |
 | Thank people who reacted | `trigger: reaction`, `audience: {mode: all}` (or `reacted` + `reactions: ["❤"]`), `scope: contacts` |
@@ -72,14 +75,16 @@ running service without a restart: it re-reads the file before every round of se
 2. Kill switch: `stories.py stop` cancels the queue and blocks sending until `stories.py start`.
 3. Never messaged: the owner, `never_message` entries, bots, deleted accounts, people who blocked the
    owner or hid the owner's stories, **people who charge Stars for messages** (Telegram reports this in
-   their profile — skipped before any attempt; the service never pays).
+   their profile — skipped before any attempt; the service never pays). People in `only_when_named` (family
+   and the like) get a message only from a rule that names them in `audience.users`.
 4. Scope filter (contacts by default). `dialog` is checked against the real chat before sending.
 5. Only fresh events: a view or reply found more than `max_event_age_h` (default 24) hours after it happened
    wakes no rule (after a downtime the final read brings up views of yesterday — a message a day later reads
    as surveillance), and an active rule ignores views from before its activation. `0` switches the age
    limit off.
 6. One message per person per rule, ever; no automatic message to a person more often than
-   `cooldown_days` (default 7) across all rules; nothing if the owner wrote to them in the last 24 h.
+   `cooldown_days` (default 7) across all rules; nothing if the owner wrote to them in the last 24 h. The
+   last two do not apply to a rule that names the person (`audience.users`): the owner chose them himself.
 7. Caps per account: 40/day for `contacts` and `dialog`, 10/day for `all`, 15/hour overall.
 8. Quiet hours (default 22:00–09:00): sending waits until the morning.
 9. Telegram anti-spam: `PEER_FLOOD` stops everything and alerts the owner; a flood wait over 5 minutes

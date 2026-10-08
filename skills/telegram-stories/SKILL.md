@@ -1,7 +1,7 @@
 ---
 name: telegram-stories
 description: "Telegram stories: who viewed, stats tables, auto-replies."
-version: 1.5.1
+version: 1.6.0
 author: "Anton Vaskov (itpartypattaya), https://t.me/passone"
 license: MIT
 compatibility: Hermes Agent >= 0.21 (written against 0.21.5); Python 3.10+; Telethon 1.45+ (tested 1.45)
@@ -102,6 +102,9 @@ the end of a series, "reply to get it", "tell me when @someone opens it", warm-u
    and the "would send to" count.
 4. Only after the owner's explicit yes to that preview: `rule activate N --confirm <digest from preview>`.
    Any edit (`rule update`) puts the rule back in shadow — preview and ask again.
+   "Write to whoever already viewed it" → `"include_seen": true` with `stories: {mode: ids}`: on activation the
+   people who already viewed (reacted, replied) are queued as well. Without it only new events count, and the
+   preview says how many people that leaves out.
 5. Direct messages also need `autoresponder.enabled: true` in the config. Change it only when the owner
    explicitly asks; never on your own initiative.
 6. "Stop", "turn it off", "enough" → `stories.py stop` immediately, then confirm.
@@ -128,6 +131,11 @@ command.
 - A story id is per account; `last` and `-N` are relative to the newest story.
 - `rule activate` fails if the digest does not match — that is the point: re-preview, re-ask.
 - The service is the only writer of automatic messages; do not send them with other tools.
+- People in `autoresponder.only_when_named` (family and the like) get a message only from a rule that names
+  them in `audience.users`; a rule for everyone or a segment skips them (`only_when_named`). `never_message`
+  is never written to, named or not.
+- A rule that names its recipients is the owner's own choice: the 7-day cooldown and "the owner wrote to them
+  in the last 24 h" do not hold it back. Limits, quiet hours and the kill switch still do.
 - A rule answers fresh events only: a view found more than `autoresponder.max_event_age_h` (24) hours after it
   happened — after the service was down — or a view from before the rule was activated sends nothing. Do not
   promise a message to people who viewed earlier.

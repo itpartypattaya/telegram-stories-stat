@@ -1,7 +1,7 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "telegram-stories-stat",
-  "version": "1.5.1",
+  "version": "1.6.0",
   "description": "Telegram stories: who viewed and when, statistics tables, opt-in auto-replies by rules.",
   "author": {"name": "Anton Vaskov", "url": "https://t.me/passone"},
   "homepage": "https://github.com/itpartypattaya/telegram-stories-stat",
